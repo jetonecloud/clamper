@@ -98,6 +98,29 @@ class Candidate:
         return self.price.hourly_usd if self.price else None
 
 
+@dataclass(frozen=True)
+class Unsupported:
+    """Something expensive Clamper found and will not touch in v1.
+
+    Not a `Candidate`, because no action exists for it and a candidate has to
+    name one. It exists so `clamper plan` can still put the biggest number on
+    the page: a SageMaker endpoint is the shape of runaway cost this tool is
+    for, and leaving it out of the plan because v1 cannot stop it would make
+    the plan look smaller than the bill.
+    """
+
+    kind: str
+    resource_id: str
+    region: str
+    description: str
+    reason: str
+    price: Price | None = None
+
+    @property
+    def hourly_usd(self) -> float | None:
+        return self.price.hourly_usd if self.price else None
+
+
 class Handler(ABC):
     """Base class for the per-resource-type handlers."""
 

@@ -34,16 +34,7 @@ def _registered_in_a_fresh_process() -> set[str]:
     return set(output.split(",")) if output else set()
 
 
-def test_importing_the_package_registers_every_written_handler() -> None:
-    registered = _registered_in_a_fresh_process()
-    assert {
-        "ec2-instance",
-        "autoscaling-group",
-        "ecs-service",
-        "rds-instance",
-        "aurora-cluster",
-    } <= registered
-
-
-def test_every_registered_handler_is_a_declared_action() -> None:
-    assert _registered_in_a_fresh_process() <= load_registry().ids()
+def test_every_declared_action_has_a_registered_handler() -> None:
+    """Equality, not a subset. A missing handler is an action that silently
+    finds nothing; an extra one is a handler for an action nobody declared."""
+    assert _registered_in_a_fresh_process() == load_registry().ids()
