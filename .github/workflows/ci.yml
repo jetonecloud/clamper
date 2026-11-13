@@ -1,0 +1,160 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  # Release reuses these jobs, so a tag can't ship something that doesn't pass.
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+      - run: uv sync --all-extras --dev
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+
+  types:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+      - run: uv sync --all-extras --dev
+      - run: uv run mypy
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # Every version `requires-python` allows. The Lambda runs 3.12; the
+        # CLI runs wherever somebody installed it.
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: uv sync --all-extras --dev
+      - run: uv run pytest --cov --cov-report=term-missing
+
+  # The tests that matter most. If any of these fail, Clamper can write to
+  # somebody's infrastructure in a way nobody declared, and it should not
+  # ship. Run on their own so a failure here is never lost in a long log.
+  safety:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+      - run: uv sync --all-extras --dev
+      - name: One write path, nothing destructive, least privilege
+        run: uv run pytest tests/test_safety.py tests/test_policy.py tests/test_actions.py -v
+      - name: The enforcer zip imports with no CLI dependency
+        run: uv run pytest tests/test_deploy_package.py -v
+
+  demo-from-a-clean-install:
+    # `clamper demo` working from a wheel is a release criterion, and it is
+    # the first thing anyone runs. Installed from the built artifact rather
+    # than the source tree, so a missing package-data entry - actions.yml,
+    # prices.yml, the demo fixtures - is caught here instead of by a user.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip build
+      - run: python -m build --wheel
+
+      - name: Install the wheel into a clean environment
+        run: |
+          set -euo pipefail
+          python -m venv /tmp/clean
+          /tmp/clean/bin/pip install --quiet dist/*.whl
+          /tmp/clean/bin/clamper version
+
+      - name: Demo works with no AWS and no source tree
+        env:
+          # Nothing to find, so a demo that reached for AWS would fail here.
+          AWS_ACCESS_KEY_ID: ""
+          AWS_SECRET_ACCESS_KEY: ""
+        run: |
+          set -euo pipefail
+          cd /tmp
+          /tmp/clean/bin/clamper demo
+          /tmp/clean/bin/clamper demo --format json --output-dir /tmp/reports
+          /tmp/clean/bin/clamper demo --format markdown --output-dir /tmp/reports
+          ls -l /tmp/reports
+          python -c "import json; json.load(open('/tmp/reports/clamper-run-report.json'))"
+
+      - name: The data files made it into the wheel
+        run: |
+          set -euo pipefail
+          /tmp/clean/bin/python - <<'PY'
+          from clamper.core.actions import load_registry
+          from clamper.core.cost import load_table
+
+          assert len(load_registry().actions) == 7
+          assert load_table().families["ec2"]["p4d.24xlarge"] > 0
+          print("data files present and loadable")
+          PY
+
+  templates:
+    # Both CloudFormation templates, exactly as `clamper deploy` would send
+    # them, through cfn-lint. --template-only makes no AWS call, so this
+    # needs no credentials.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+      - run: uv sync --all-extras --dev
+      - run: uv tool install cfn-lint
+
+      - name: The starter config
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/starter
+          uv run clamper init --path /tmp/starter/clamper.yml --email ops@example.com
+          uv run clamper deploy --template-only --config /tmp/starter/clamper.yml --out /tmp/out/starter
+          cfn-lint /tmp/out/starter/*.yaml
+
+      - name: The example config
+        run: |
+          set -euo pipefail
+          uv run clamper validate --config examples/clamper.yml
+          uv run clamper deploy --template-only --config examples/clamper.yml --out /tmp/out/example
+          cfn-lint /tmp/out/example/*.yaml
+
+  docker:
+    # The image is published on release, so a Dockerfile that stopped
+    # building would otherwise be discovered at the worst possible moment.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: clamper:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke-test the image
+        # It starts, it is not root, and the documented bind mount lands
+        # files on the host.
+        run: |
+          set -euo pipefail
+          docker run --rm clamper:ci version
+          docker run --rm --entrypoint id clamper:ci -un | grep -qx clamper
+          mkdir -p "$RUNNER_TEMP/out"
+          chmod 777 "$RUNNER_TEMP/out"
+          docker run --rm -v "$RUNNER_TEMP/out:/out" clamper:ci \
+            demo --format json --output-dir /out
+          test -f "$RUNNER_TEMP/out/clamper-run-report.json"
