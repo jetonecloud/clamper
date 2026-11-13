@@ -9,7 +9,10 @@ with nothing to clamp.
 
 from __future__ import annotations
 
-from clamper.core.resources import ec2  # noqa: F401  - imported to register
+from clamper.core.resources import (
+    asg,  # noqa: F401  - imported to register
+    ec2,  # noqa: F401  - imported to register
+)
 from clamper.core.resources.base import (
     Candidate,
     Handler,
