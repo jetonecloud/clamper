@@ -1,0 +1,79 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# uv
+.uv/
+uv.lock.bak
+
+# Testing / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+.tox/
+.nox/
+
+# Type checking / lint caches
+.mypy_cache/
+.ruff_cache/
+.dmypy.json
+dmypy.json
+
+# Clamper output. A plan or a ledger export names your resources and says
+# what is currently stopped, which is useful to an attacker and useless in a
+# commit.
+clamper-plan-*
+clamper-status-*
+clamper-ledger-*
+clamper-report-*
+*.clamper.json
+
+# Build output from `clamper deploy`. The Lambda zip is a build artifact and
+# the rendered templates are generated from the package.
+.clamper-build/
+clamper-enforcer-*.zip
+
+# Someone's own clamper.yml belongs in *their* repo, not in this one. The
+# committed example lives in examples/.
+/clamper.yml
+/clamper.yaml
+
+# AWS / secrets — defense in depth, these must never exist in this repo
+.aws/
+*.pem
+*.key
+credentials
+credentials.json
+.env
+.env.*
+!.env.example
+
+# Local drafts and notes
+.local/
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

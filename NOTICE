@@ -1,0 +1,62 @@
+Clamper
+Copyright 2026 Jet1 (https://jetonecloud.com)
+
+This product includes software developed at Jet1.
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not
+use this file except in compliance with the License. You may obtain a copy of
+the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+License for the specific language governing permissions and limitations under
+the License.
+
+-------------------------------------------------------------------------------
+
+Third-party content
+-------------------
+
+No third-party source code is vendored into this repository. Runtime
+dependencies are declared in pyproject.toml and installed from PyPI; their
+licences are their own:
+
+  typer      MIT
+  click      BSD-3-Clause
+  boto3      Apache-2.0
+  rich       MIT
+  PyYAML     MIT
+
+The Lambda deployment package built by `clamper deploy` contains this
+package and nothing else. `boto3` and `botocore` are already present in the
+Lambda Python runtime, and `rich` and `typer` are command-line-only and are
+deliberately excluded — see src/clamper/core/stack/package.py.
+
+-------------------------------------------------------------------------------
+
+AWS
+---
+
+Clamper drives Amazon Web Services' Budgets, EC2, EC2 Auto Scaling, ECS, RDS,
+Lambda, SageMaker, SNS, DynamoDB, EventBridge and CloudFormation APIs. Jet1
+is not affiliated with, endorsed by, or sponsored by Amazon Web Services.
+"AWS", "Amazon Web Services" and the names of the services above are
+trademarks of Amazon.com, Inc. or its affiliates.
+
+The AWS behaviour Clamper depends on — the Budgets refresh cadence, the
+once-per-period `ACTUAL` alert, and RDS restarting a stopped instance after
+seven days — is documented with links in docs/design.md. It was read from
+AWS's own documentation rather than recalled, because all three decide what
+the tool can honestly promise.
+
+-------------------------------------------------------------------------------
+
+Test fixtures
+-------------
+
+The fixtures in src/clamper/data/demo/ and tests/fixtures/ describe no real
+infrastructure. The account ID 123456789012 is AWS's documentation
+placeholder. No fixture contains a credential.
