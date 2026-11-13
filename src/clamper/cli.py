@@ -26,7 +26,7 @@ Exit codes, as in Crosswind:
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from importlib import resources
 from pathlib import Path
 from typing import Annotated, Any
@@ -42,9 +42,11 @@ from clamper.core.actuator import Actuator
 from clamper.core.budgets import Spend, read_spend
 from clamper.core.config import Config, ConfigError, Limit
 from clamper.core.discover import discover
-from clamper.core.ledger import CLAMP_ID, Ledger, LedgerError
+from clamper.core.ledger import CLAMP_ID, Ledger, LedgerError, MemoryLedger
 from clamper.core.names import StackNames
 from clamper.core.plan import build_plan
+from clamper.core.policy import PolicyError, enforcer_policy, operator_policy
+from clamper.core.policy import render as render_policy
 from clamper.core.release import release, release_report
 from clamper.core.report import EXTENSIONS, FORMATS, history, model, render
 from clamper.core.resources import handler_for
@@ -499,6 +501,105 @@ def clamp_command(
             "record, and `clamper status` shows it."
         )
     raise typer.Exit(report.exit_code)
+
+
+@app.command()
+def simulate(
+    assume_breach: Annotated[
+        bool,
+        typer.Option(
+            "--assume-breach",
+            help="Treat every limit as breached, whatever the real spend is.",
+        ),
+    ] = False,
+    config: ConfigOption = None,
+    formats: FormatOption = None,
+    output_dir: OutputOption = None,
+    profile: ProfileOption = None,
+    region: RegionOption = None,
+    role_arn: RoleOption = None,
+) -> None:
+    """Run the enforcer's own reconcile against your account, changing nothing.
+
+    Real reads, dry-run forced whatever `mode` says, and an in-memory ledger
+    so not even the ledger table is written. What you try out is the code
+    that will run in the Lambda, not a separate demo path.
+    """
+    loaded = _load_config(config)
+    chosen = _formats(formats)
+    aws = _aws(profile, region, role_arn)
+    regions = _regions(loaded, aws)
+    registry = load_registry()
+    clients = aws.clients
+    real = _spend_reader(aws, loaded)
+
+    def spend(limit: Limit) -> Spend:
+        found = real(limit)
+        if not assume_breach:
+            return found
+        # Exactly at the clamp threshold, so the decision is a breach and
+        # the report's note says the real spend did not decide it.
+        return replace(found, actual=limit.clamp_amount, error=None)
+
+    outcome = reconcile(
+        loaded,
+        actuator=Actuator(clients, dry_run=True, registry=registry),
+        ledger=MemoryLedger(),
+        identity=_self_identity(aws, loaded),
+        read_spend=spend,
+        find=lambda actions: discover(clients, actions, regions),
+        live_state=lambda entry: handler_for(registry.get(entry.target.action_id)).live_state(
+            clients, entry
+        ),
+        actor=f"simulate:{aws.identity.arn}",
+        trigger=TRIGGER_MANUAL,
+        account=aws.identity.account,
+        registry=registry,
+    )
+    report = outcome.report
+    notes: tuple[str, ...] = (
+        "simulate: dry-run forced and an in-memory ledger. Nothing in your account was "
+        "changed, the ledger table included.",
+    )
+    if assume_breach:
+        notes += (
+            "--assume-breach: every limit was treated as exactly at its clamp threshold. "
+            "The real spend did not decide this run.",
+        )
+    _emit(replace(report, notes=notes + report.notes), chosen, output_dir)
+    raise typer.Exit(report.exit_code)
+
+
+PolicyKind = Annotated[str, typer.Option("--kind", help="enforcer or operator.")]
+
+
+@app.command()
+def policy(
+    kind: PolicyKind = "enforcer",
+    account: Annotated[
+        str, typer.Option("--account", help="The 12-digit account id to scope ARNs to.")
+    ] = "",
+    policy_region: Annotated[
+        str, typer.Option("--region", help="Scope regional ARNs to this region.")
+    ] = "*",
+    config: ConfigOption = None,
+) -> None:
+    """Print the IAM policy generated from clamper.yml and actions.yml. No AWS calls.
+
+    `enforcer` is what the Lambda runs as. `operator` is for a person running
+    plan, status, ledger, release, clamp and doctor.
+    """
+    if kind not in {"enforcer", "operator"}:
+        raise typer.BadParameter(f"{kind!r} is not enforcer or operator.", param_hint="--kind")
+    if not (len(account) == 12 and account.isdigit()):
+        raise _fail("--account must be the 12-digit account id the policy is for.")
+    loaded = _load_config(config)
+    build = enforcer_policy if kind == "enforcer" else operator_policy
+    try:
+        document = build(loaded, account, region=policy_region)
+    except PolicyError as exc:
+        raise _fail(str(exc)) from exc
+    click.echo(render_policy(document), nl=False)
 
 
 def _ledger(aws: Aws, config: Config) -> Ledger:
