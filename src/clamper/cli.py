@@ -38,12 +38,14 @@ from clamper import __version__
 from clamper.core import config as config_module
 from clamper.core import session as session_module
 from clamper.core.actions import load_registry
+from clamper.core.actuator import Actuator
 from clamper.core.budgets import Spend, read_spend
 from clamper.core.config import Config, ConfigError, Limit
 from clamper.core.discover import discover
 from clamper.core.ledger import CLAMP_ID, Ledger, LedgerError
 from clamper.core.names import StackNames
 from clamper.core.plan import build_plan
+from clamper.core.release import release, release_report
 from clamper.core.report import EXTENSIONS, FORMATS, history, model, render
 from clamper.core.session import Clients, Identity
 from clamper.core.status import build_status
@@ -363,6 +365,75 @@ def ledger_command(
     if found.unknown:
         raise typer.Exit(EXIT_TOOL_FAILED)
     raise typer.Exit(1 if found.active else 0)
+
+
+@app.command("release")
+def release_command(
+    clamp_id: Annotated[
+        str | None, typer.Argument(help="The clamp run to undo, from the notification.")
+    ] = None,
+    release_all: Annotated[
+        bool, typer.Option("--all", help="Release everything currently clamped.")
+    ] = False,
+    target: Annotated[str | None, typer.Option("--target", help="Only this resource id.")] = None,
+    force: Annotated[
+        bool,
+        typer.Option("--force", help="Restore even where somebody changed it by hand since."),
+    ] = False,
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="Say what would be restored; change nothing.")
+    ] = False,
+    config: ConfigOption = None,
+    formats: FormatOption = None,
+    output_dir: OutputOption = None,
+    profile: ProfileOption = None,
+    region: RegionOption = None,
+    role_arn: RoleOption = None,
+) -> None:
+    """Put back what a clamp stopped, exactly as the ledger recorded it.
+
+    Ignores `mode`: releasing is a person undoing a clamp on purpose, and a
+    config in dry-run must never leave a clamp made in enforce unreleasable.
+    It has its own --dry-run instead. Anything changed by hand since the
+    clamp is a conflict and is left alone unless --force.
+    """
+    if (clamp_id is None) == (not release_all):
+        raise _fail("name one clamp id, or pass --all. Not both, and not neither.")
+    if clamp_id is not None and not CLAMP_ID.match(clamp_id):
+        raise _fail(f"{clamp_id!r} is not a clamp id. `clamper ledger` lists them.")
+    loaded = _load_config(config)
+    chosen = _formats(formats)
+    aws = _aws(profile, region, role_arn)
+    store = _ledger(aws, loaded)
+    try:
+        entries = store.active() if clamp_id is None else store.entries_for(clamp_id)
+    except LedgerError as exc:
+        raise _fail(str(exc)) from exc
+    entries = tuple(entry for entry in entries if entry.active)
+    if target is not None:
+        entries = tuple(entry for entry in entries if entry.target.target_id == target)
+    if not entries:
+        which = f"clamp {clamp_id}" if clamp_id else "the ledger"
+        suffix = f" for {target}" if target else ""
+        _err(f"nothing in {which} is still clamped{suffix}. Nothing to release.")
+        raise typer.Exit(0)
+
+    outcomes = release(
+        entries,
+        clients=aws.clients,
+        ledger=store,
+        actuator=Actuator(aws.clients, dry_run=dry_run),
+        force=force,
+    )
+    report = release_report(
+        outcomes,
+        stack_name=loaded.stack_name,
+        dry_run=dry_run,
+        actor=aws.actor,
+        account=aws.identity.account,
+    )
+    _emit(report, chosen, output_dir)
+    raise typer.Exit(report.exit_code)
 
 
 def _ledger(aws: Aws, config: Config) -> Ledger:

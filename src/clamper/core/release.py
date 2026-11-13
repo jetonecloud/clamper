@@ -37,15 +37,16 @@ Importable inside a Lambda.
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from botocore.exceptions import BotoCoreError, ClientError
 
 from clamper.core.actions import Registry, UnknownAction, load_registry
 from clamper.core.actuator import Actuator, Call, Result
-from clamper.core.config import REGION
+from clamper.core.config import MODE_DRY_RUN, MODE_ENFORCE, REGION
 from clamper.core.ledger import Entry, LedgerStore
+from clamper.core.report import lines, model
 from clamper.core.resources import handler_for
 from clamper.core.session import Clients
 
@@ -292,3 +293,67 @@ def _describe(exc: Exception) -> str:
         error = exc.response.get("Error", {}) if isinstance(exc.response, dict) else {}
         return f"{error.get('Code') or 'ClientError'} - {error.get('Message') or ''}".strip()
     return str(exc)
+
+
+# --- the report ---------------------------------------------------------
+
+#: Release outcome -> report line status. `not-active` is a skip: nothing
+#: was there to restore, and that is not a hole in anything.
+_LINE_STATUS = {
+    OUTCOME_RELEASED: "released",
+    OUTCOME_WOULD_RELEASE: "would-release",
+    OUTCOME_FAILED: "release-failed",
+    OUTCOME_CONFLICT: "conflict",
+    OUTCOME_GONE: "gone",
+    OUTCOME_UNRESTORABLE: "unrestorable",
+    OUTCOME_NOT_ACTIVE: "skipped",
+    OUTCOME_ERROR: "error",
+}
+
+
+def release_report(
+    outcomes: Iterable[ReleaseOutcome],
+    *,
+    stack_name: str,
+    dry_run: bool,
+    actor: str = "",
+    account: str | None = None,
+) -> model.Report:
+    """One `Report` for a release run, so it renders like everything else.
+
+    The mode is the release's own `--dry-run`, not the config's. Release is
+    a person putting things back on purpose; a config in `dry-run` must not
+    leave somebody unable to undo a clamp made while it was in `enforce`.
+    """
+    items = tuple(outcomes)
+    acted: list[model.Line] = []
+    not_acted: list[model.Line] = []
+    for item in items:
+        detail = item.detail
+        if item.forced and item.outcome == OUTCOME_WOULD_RELEASE:
+            detail += " (over a conflict, because of --force)"
+        line = lines.from_entry(item.entry, status=_LINE_STATUS[item.outcome])
+        line = replace(line, detail=detail)
+        if item.outcome in {OUTCOME_RELEASED, OUTCOME_WOULD_RELEASE}:
+            acted.append(line)
+        else:
+            not_acted.append(line)
+    notes: list[str] = []
+    if any(item.outcome == OUTCOME_CONFLICT for item in items):
+        notes.append(
+            "A conflict means somebody changed the resource by hand after the clamp. It was "
+            "left as it is and is still recorded as clamped. Check it, then re-run with "
+            "--force to restore the recorded state anyway."
+        )
+    if any(item.forced and item.released for item in items):
+        notes.append("--force overrode at least one conflict. Each one is marked above.")
+    return model.Report(
+        kind=model.KIND_RELEASE,
+        stack_name=stack_name,
+        mode=MODE_DRY_RUN if dry_run else MODE_ENFORCE,
+        actor=actor,
+        account=account,
+        acted=model.ordered(acted),
+        not_acted=model.ordered(not_acted),
+        notes=tuple(notes),
+    )
