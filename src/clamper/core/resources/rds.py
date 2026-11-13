@@ -145,3 +145,90 @@ class RdsInstanceHandler(Handler):
 
     def release_params(self, entry: Entry) -> dict[str, Any]:
         return {"DBInstanceIdentifier": entry.target.target_id}
+
+
+@register
+class AuroraClusterHandler(Handler):
+    """Aurora clusters: the cluster is the unit AWS stops.
+
+    No price. A cluster's cost is the sum of its member instances, which
+    `DescribeDBClusters` names but does not size, and for Serverless v2 it is
+    a capacity range rather than a class. A figure built from a guess at
+    either would be a wrong number at the top of a plan, so the plan says
+    "price unknown" instead.
+    """
+
+    action_id = "aurora-cluster"
+
+    def discover(self, clients: Clients, region: str) -> list[Candidate]:
+        found: list[Candidate] = []
+        for page in paginate(clients, "rds", "describe_db_clusters", region):
+            for cluster in page.get("DBClusters", []):
+                candidate = self._candidate(cluster, region)
+                if candidate is not None:
+                    found.append(candidate)
+        return found
+
+    def _candidate(self, cluster: Mapping[str, Any], region: str) -> Candidate | None:
+        identifier = str(cluster.get("DBClusterIdentifier") or "")
+        if not identifier:
+            return None
+        engine = str(cluster.get("Engine") or "unknown")
+        if not engine.startswith("aurora"):
+            # Multi-AZ DB clusters for MySQL/PostgreSQL also come back from
+            # DescribeDBClusters. They are not Aurora and not in v1, and they
+            # are not "found and refused" either — just not this action.
+            return None
+
+        tags = tag_map(cluster.get("TagList"))
+        status = str(cluster.get("Status") or "unknown")
+        mode = str(cluster.get("EngineMode") or "provisioned")
+        members = len(cluster.get("DBClusterMembers") or [])
+        description = f"{engine}, {mode}, {members} member(s), {status}"
+
+        def refuse(reason: str) -> Candidate:
+            return self.unclampable(
+                target_id=identifier,
+                region=region,
+                description=description,
+                tags=tags,
+                reason=reason,
+            )
+
+        if mode == "serverless":
+            return refuse("Aurora Serverless v1 pauses itself and AWS does not allow stopping it")
+        if cluster.get("ReplicationSourceIdentifier"):
+            return refuse("is a cross-Region read replica; AWS refuses to stop one")
+        if status in ALREADY_STOPPED:
+            return refuse(f"already {status}")
+        if status != STOPPABLE:
+            return refuse(f"status is {status}; AWS only accepts a stop from available")
+
+        return self.candidate(
+            target_id=identifier,
+            region=region,
+            description=description,
+            tags=tags,
+            state={"status": status},
+        )
+
+    def live_state(self, clients: Clients, entry: Entry) -> Mapping[str, Any] | None:
+        client = clients.get("rds", region=entry.target.region)
+        try:
+            response = client.describe_db_clusters(DBClusterIdentifier=entry.target.target_id)
+        except ClientError as exc:
+            if _not_found(exc):
+                return None
+            raise
+        for cluster in response.get("DBClusters", []):
+            return {"status": str(cluster.get("Status") or "unknown")}
+        return None
+
+    def clamp_params(self, candidate: Candidate) -> dict[str, Any]:
+        return {"DBClusterIdentifier": candidate.target_id}
+
+    def applied_state(self, candidate: Candidate) -> dict[str, Any]:
+        return {"status": "stopped"}
+
+    def release_params(self, entry: Entry) -> dict[str, Any]:
+        return {"DBClusterIdentifier": entry.target.target_id}
