@@ -36,6 +36,7 @@ import typer
 
 from clamper import __version__
 from clamper.core import config as config_module
+from clamper.core import doctor as doctor_module
 from clamper.core import session as session_module
 from clamper.core.actions import load_registry
 from clamper.core.actuator import Actuator
@@ -600,6 +601,63 @@ def policy(
     except PolicyError as exc:
         raise _fail(str(exc)) from exc
     click.echo(render_policy(document), nl=False)
+
+
+@app.command()
+def doctor(
+    config: ConfigOption = None,
+    profile: ProfileOption = None,
+    region: RegionOption = None,
+    role_arn: RoleOption = None,
+) -> None:
+    """Check that a clamp would work and somebody would hear about it. Read-only.
+
+    Credentials, the stack, the email subscription, cost allocation tags,
+    and every budget. Exit 2 if anything FAILs; warnings alone exit 0.
+    """
+    loaded = _load_config(config)
+    click.echo(f"clamper doctor - stack {loaded.stack_name}, {loaded.source}")
+    try:
+        session = session_module.build_session(profile=profile, region=region, role_arn=role_arn)
+        identity = session_module.whoami(session)
+    except session_module.CredentialsError as exc:
+        click.echo(doctor_module.Check("credentials", doctor_module.FAIL, str(exc)).line)
+        click.echo("")
+        click.echo(
+            "Nothing else can be checked without credentials. Clamper uses the standard "
+            "chain: AWS_PROFILE, SSO, an instance or container role, or --role-arn."
+        )
+        raise typer.Exit(EXIT_TOOL_FAILED) from exc
+
+    checks = [doctor_module.Check("credentials", doctor_module.PASS, identity.label)]
+    if identity.is_root:
+        checks.append(
+            doctor_module.Check(
+                "not root",
+                doctor_module.WARN,
+                "these are the root user's credentials. Use a role with the operator policy.",
+            )
+        )
+    aws = Aws(session=session, clients=Clients(session), identity=identity)
+    if not aws.clients.default_region:
+        checks.append(
+            doctor_module.Check(
+                "region", doctor_module.FAIL, "no default region: pass --region or set one."
+            )
+        )
+    else:
+        checks += doctor_module.run_checks(
+            loaded,
+            aws.clients,
+            account=identity.account,
+            read_spend=_spend_reader(aws, loaded),
+        )
+    for check in checks:
+        click.echo(check.line)
+    code = doctor_module.exit_code(checks)
+    click.echo("")
+    click.echo("Everything checked passed." if code == 0 else "Fix each FAIL above.")
+    raise typer.Exit(code)
 
 
 def _ledger(aws: Aws, config: Config) -> Ledger:
