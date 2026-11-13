@@ -1,0 +1,342 @@
+# Every write Clamper can make.
+#
+# This file is the whole of it. If an AWS call is not declared here, no part
+# of Clamper can make it: `core/actuator.py` looks the boto3 method name up
+# by action id rather than accepting one from its caller, and
+# `core/policy.py` generates the enforcer's IAM policy from these same rows.
+# There is no second list to keep in step, which is the usual way a
+# least-privilege policy rots into a wildcard.
+#
+# It is a data file so that the complete set of things this tool can do to
+# your account is one short document you can read without reading any Python.
+#
+# Fields
+# ------
+#   id            Referenced from `clamper.yml` as a `targets.types` entry and
+#                 a `selectors.type`. Stable: it appears in the ledger, so
+#                 renaming one orphans existing entries.
+#   title          How the resource is named in a report. Written for someone
+#                  reading a notification at 3am, so "EC2 instance", not
+#                  "AWS::EC2::Instance".
+#   client         The boto3 client name.
+#   identifier     The field name of the resource's own id, for reports and
+#                  for validating a ledger entry before building a release.
+#   arn_pattern    Resource ARN pattern for the generated IAM policy.
+#                  `{account}` and `{region}` are substituted at generation.
+#   tag_condition  The IAM condition key that scopes the write actions to the
+#                  managed tag, or `null` where the service supports none.
+#                  Note autoscaling uses its OWN key — a policy written with
+#                  aws:ResourceTag on autoscaling:UpdateAutoScalingGroup is
+#                  not an error, it just never matches, so the permission
+#                  silently does nothing. See docs/design.md.
+#   discover       Read-only IAM actions needed to find candidates. These
+#                  cannot be resource-scoped: discovery is enumeration.
+#   records        Which fields of the previous state go into the ledger
+#                  before the clamp. This is what `clamper release` restores,
+#                  so a field missing here is a field that cannot be put back.
+#   clamp          method / iam / params — the write that stops the spend.
+#   release        method / iam / params — the inverse.
+#   release_absent Optional. The release to use when the recorded previous
+#                  value was absent rather than a value. Only Lambda needs
+#                  one; see the comment there.
+#   restart_after_days
+#                  Optional. AWS undoes this clamp by itself after this many
+#                  days, so the reconcile run re-applies it and says so.
+#   reversible     Must be true. The field exists so that a row claiming
+#                  otherwise fails to load rather than being merged.
+#   notes          Shown by `clamper plan` under the target, because the
+#                  limitations below are things a person needs told before
+#                  they rely on a clamp, not after.
+#
+# Adding an action
+# ---------------
+# See CONTRIBUTING.md. The two rules that are enforced rather than requested:
+# the action must be reversible, and `actuator.py` must gain no new code — a
+# row that needs a special case in the actuator is a row whose design is not
+# finished.
+
+version: 1
+
+#: Verb prefixes that make a call destructive. An action whose boto3 method
+#: or IAM action begins with one of these raises `DestructiveAction` at load,
+#: so the package fails to import rather than shipping with the row in it.
+destructive_verbs:
+  - terminate
+  - delete
+  - destroy
+  - remove
+  - purge
+  - erase
+  - release          # ec2:ReleaseAddress, and anything shaped like it
+  - revoke
+  - detach
+  - deregister
+  - cancel
+  - reboot           # not destructive, but not a clamp either, and it is a
+                     # write that looks harmless and interrupts a service
+
+#: The single named exception, with its reason. A string, not a pattern:
+#: a pattern here would be a hole, and this is the one row in the file whose
+#: whole purpose is to be narrow.
+#:
+#: Deleting a *concurrency setting* is not deleting a resource. It restores a
+#: Lambda function to the account's default concurrency, and it is the only
+#: correct release for a function that had no reserved concurrency before the
+#: clamp. The alternative — leaving the reservation at some invented number —
+#: would change the function's behaviour permanently in the name of putting
+#: it back.
+destructive_verb_exceptions:
+  - "lambda:DeleteFunctionConcurrency"
+
+actions:
+  - id: ec2-instance
+    title: EC2 instance
+    client: ec2
+    identifier: InstanceId
+    arn_pattern: "arn:aws:ec2:*:{account}:instance/*"
+    tag_condition: "aws:ResourceTag/"
+    reversible: true
+    discover:
+      - ec2:DescribeInstances
+    records:
+      - state
+    clamp:
+      method: stop_instances
+      iam: ec2:StopInstances
+      params: [InstanceIds]
+    release:
+      method: start_instances
+      iam: ec2:StartInstances
+      params: [InstanceIds]
+    notes:
+      - >-
+        EBS volumes keep billing while the instance is stopped. The saving is
+        the instance hours.
+      - >-
+        Instance-store volumes are wiped on stop and anything in RAM is lost.
+      - >-
+        A stopped instance usually comes back with a different public IPv4
+        address unless it has an Elastic IP.
+      - >-
+        An instance that belongs to an Auto Scaling group is skipped here and
+        handled by the autoscaling-group action, because Auto Scaling
+        relaunches instances that are stopped underneath it.
+
+  - id: autoscaling-group
+    title: Auto Scaling group
+    client: autoscaling
+    identifier: AutoScalingGroupName
+    arn_pattern: "arn:aws:autoscaling:*:{account}:autoScalingGroup:*:autoScalingGroupName/*"
+    # Auto Scaling does NOT honour aws:ResourceTag on this action.
+    tag_condition: "autoscaling:ResourceTag/"
+    reversible: true
+    discover:
+      - autoscaling:DescribeAutoScalingGroups
+    records:
+      - min_size
+      - max_size
+      - desired_capacity
+    clamp:
+      method: update_auto_scaling_group
+      iam: autoscaling:UpdateAutoScalingGroup
+      # MinSize has to go to 0 as well as DesiredCapacity. Setting desired
+      # alone leaves the group below its minimum, and Auto Scaling launches
+      # instances to get back to it — which looks exactly like the clamp
+      # failing for no reason.
+      params: [AutoScalingGroupName, MinSize, DesiredCapacity]
+    release:
+      method: update_auto_scaling_group
+      iam: autoscaling:UpdateAutoScalingGroup
+      params: [AutoScalingGroupName, MinSize, MaxSize, DesiredCapacity]
+    notes:
+      - >-
+        Scaling to zero terminates the group's instances. That is Auto
+        Scaling's own behaviour and it is why only the group's sizes are
+        restorable, not the instances.
+      - >-
+        Anything holding state on those instances loses it. Use
+        clamper:protect on a group whose instances are not disposable.
+      - >-
+        A release restores the recorded sizes and Auto Scaling launches fresh
+        instances from the current launch template.
+
+  - id: ecs-service
+    title: ECS service
+    client: ecs
+    identifier: service
+    arn_pattern: "arn:aws:ecs:*:{account}:service/*/*"
+    tag_condition: "aws:ResourceTag/"
+    reversible: true
+    discover:
+      - ecs:ListClusters
+      - ecs:ListServices
+      - ecs:DescribeServices
+      - ecs:ListTagsForResource
+    records:
+      - desired_count
+    clamp:
+      method: update_service
+      iam: ecs:UpdateService
+      params: [cluster, service, desiredCount]
+    release:
+      method: update_service
+      iam: ecs:UpdateService
+      params: [cluster, service, desiredCount]
+    notes:
+      - >-
+        Running tasks are stopped. A service behind a load balancer starts
+        failing health checks and the target group empties.
+      - >-
+        A service with deployment circuit breaker or a long draining timeout
+        takes time to reach zero; the clamp is recorded as soon as the API
+        accepts it, which is not the same as the tasks being gone.
+
+  - id: rds-instance
+    title: RDS instance
+    client: rds
+    identifier: DBInstanceIdentifier
+    arn_pattern: "arn:aws:rds:*:{account}:db:*"
+    tag_condition: "aws:ResourceTag/"
+    reversible: true
+    restart_after_days: 7
+    discover:
+      - rds:DescribeDBInstances
+      - rds:ListTagsForResource
+    records:
+      - status
+    clamp:
+      method: stop_db_instance
+      iam: rds:StopDBInstance
+      params: [DBInstanceIdentifier]
+    release:
+      method: start_db_instance
+      iam: rds:StartDBInstance
+      params: [DBInstanceIdentifier]
+    notes:
+      - >-
+        AWS restarts a stopped DB instance after 7 consecutive days. The
+        reconcile run re-stops anything still clamped and says so in the
+        notification.
+      - >-
+        Storage, provisioned IOPS and backup storage keep billing while it is
+        stopped. The saving is the instance hours.
+      - >-
+        AWS refuses to stop an instance that has a read replica or is one, and
+        refuses an RDS for SQL Server instance in a Multi-AZ deployment. Both
+        are reported as not clamped with the reason.
+      - >-
+        Starting a stopped instance requires recovery and can take minutes to
+        hours. A release is not instant.
+
+  - id: aurora-cluster
+    title: Aurora cluster
+    client: rds
+    identifier: DBClusterIdentifier
+    arn_pattern: "arn:aws:rds:*:{account}:cluster:*"
+    tag_condition: "aws:ResourceTag/"
+    reversible: true
+    restart_after_days: 7
+    discover:
+      - rds:DescribeDBClusters
+      - rds:ListTagsForResource
+    records:
+      - status
+    clamp:
+      method: stop_db_cluster
+      iam: rds:StopDBCluster
+      params: [DBClusterIdentifier]
+    release:
+      method: start_db_cluster
+      iam: rds:StartDBCluster
+      params: [DBClusterIdentifier]
+    notes:
+      - >-
+        AWS restarts a stopped cluster after 7 consecutive days, same as an
+        instance. The reconcile run re-stops it.
+      - >-
+        Storage and backup storage keep billing. Aurora Serverless v2 scales
+        to a floor rather than stopping, so stopping the cluster is the only
+        way to take its compute to zero.
+      - >-
+        A cluster that is part of a global database cannot be stopped. Reported
+        as not clamped with the reason AWS gives.
+
+  - id: lambda-function
+    title: Lambda function
+    client: lambda
+    identifier: FunctionName
+    arn_pattern: "arn:aws:lambda:*:{account}:function:*"
+    tag_condition: "aws:ResourceTag/"
+    reversible: true
+    discover:
+      - lambda:ListFunctions
+      - lambda:GetFunctionConcurrency
+      - lambda:ListTags
+    records:
+      - reserved_concurrent_executions
+    clamp:
+      # Reserving zero concurrency leaves the function no concurrency to run
+      # in, so every invocation is throttled. The function, its triggers and
+      # its code are untouched — this is the least destructive way to stop a
+      # function in a retry loop from costing anything.
+      method: put_function_concurrency
+      iam: lambda:PutFunctionConcurrency
+      params: [FunctionName, ReservedConcurrentExecutions]
+    release:
+      method: put_function_concurrency
+      iam: lambda:PutFunctionConcurrency
+      params: [FunctionName, ReservedConcurrentExecutions]
+    release_absent:
+      # Used when the function had no reserved concurrency before the clamp.
+      # Restoring it means removing the setting, not setting it to a number
+      # we made up. This is the one named destructive-verb exception in this
+      # file; the reason is at the top under destructive_verb_exceptions.
+      method: delete_function_concurrency
+      iam: lambda:DeleteFunctionConcurrency
+      params: [FunctionName]
+    notes:
+      - >-
+        Throttled invocations fail. An asynchronous invocation is retried and
+        may end up in the function's dead-letter queue or on-failure
+        destination; a synchronous caller gets a 429.
+      - >-
+        An event source mapping keeps trying, so an SQS queue behind a
+        clamped function will accumulate and may start sending messages to
+        its dead-letter queue.
+      - >-
+        Reserved concurrency is shared across all versions and aliases of the
+        function. There is no per-alias clamp.
+
+  - id: sagemaker-notebook
+    title: SageMaker notebook instance
+    client: sagemaker
+    identifier: NotebookInstanceName
+    arn_pattern: "arn:aws:sagemaker:*:{account}:notebook-instance/*"
+    tag_condition: "aws:ResourceTag/"
+    reversible: true
+    discover:
+      - sagemaker:ListNotebookInstances
+      - sagemaker:DescribeNotebookInstance
+      - sagemaker:ListTags
+    records:
+      - status
+    clamp:
+      method: stop_notebook_instance
+      iam: sagemaker:StopNotebookInstance
+      params: [NotebookInstanceName]
+    release:
+      method: start_notebook_instance
+      iam: sagemaker:StartNotebookInstance
+      params: [NotebookInstanceName]
+    notes:
+      - >-
+        Anything on the instance's own filesystem outside /home/ec2-user/SageMaker
+        is lost on stop, including installed packages. The EBS volume for that
+        directory survives and keeps billing.
+      - >-
+        A running notebook's kernel state is lost. Unsaved work goes with it.
+      - >-
+        SageMaker endpoints are a much bigger cost and are NOT in v1: the only
+        way to stop an endpoint's cost is to delete it, and the inverse is a
+        rebuild that can fail. `clamper plan` lists endpoints it found as not
+        clamped so the biggest number is still visible. See docs/actions.md.
