@@ -35,6 +35,7 @@ import click
 import typer
 
 from clamper import __version__
+from clamper import deploy as deploy_module
 from clamper.core import config as config_module
 from clamper.core import doctor as doctor_module
 from clamper.core import session as session_module
@@ -658,6 +659,81 @@ def doctor(
     click.echo("")
     click.echo("Everything checked passed." if code == 0 else "Fix each FAIL above.")
     raise typer.Exit(code)
+
+
+@app.command("deploy")
+def deploy_command(
+    template_only: Annotated[
+        bool,
+        typer.Option(
+            "--template-only",
+            help="Write both templates and the zip to --out. No AWS calls at all.",
+        ),
+    ] = False,
+    out: Annotated[Path, typer.Option("--out", help="Where --template-only writes.")] = Path(
+        ".clamper-build"
+    ),
+    yes: Annotated[bool, typer.Option("--yes", help="Do not ask before deploying.")] = False,
+    config: ConfigOption = None,
+    profile: ProfileOption = None,
+    region: RegionOption = None,
+    role_arn: RoleOption = None,
+) -> None:
+    """Deploy the budgets, the enforcer, its ledger and its schedule.
+
+    Two CloudFormation stacks: a bootstrap stack holding one bucket for the
+    enforcer's zip, and the main stack. --template-only writes both and the
+    zip to a directory and touches no AWS API, so you can read everything,
+    run cfn-lint over it, and deploy it from the console instead.
+    """
+    loaded = _load_config(config)
+    if loaded.source is None:
+        raise _fail("the config has no file to pack into the enforcer.")
+    text = Path(loaded.source).read_text(encoding="utf-8")
+    artifacts = deploy_module.build_artifacts(loaded, text)
+
+    if template_only:
+        for path in deploy_module.write_artifacts(artifacts, out):
+            click.echo(f"wrote {path}")
+        click.echo("")
+        names = StackNames(loaded.stack_name)
+        click.echo("To deploy by hand, from the console or your own pipeline:")
+        click.echo(f"  1. Create a stack named {names.bootstrap_stack} from bootstrap.yaml.")
+        click.echo(f"  2. Upload {artifacts.zip_name} to its ArtifactBucket output,")
+        click.echo(f"     under the key {artifacts.key}")
+        click.echo(f"  3. Create a stack named {loaded.stack_name} from main.yaml, with")
+        click.echo("     ArtifactBucket and ArtifactKey set to those two values, and")
+        click.echo("     acknowledge that it creates a named IAM role.")
+        return
+
+    aws = _aws(profile, region, role_arn)
+    where = aws.clients.default_region
+    if not where:
+        raise _fail("no region: pass --region or set a default. The stack lives in one region.")
+    _err(
+        f"Deploying stack {loaded.stack_name} in {where}, account {aws.identity.account}, "
+        f"mode {loaded.mode}."
+    )
+    if not loaded.dry_run:
+        _err(
+            "mode is ENFORCE: once deployed, a breached limit stops resources. Run `clamper plan`."
+        )
+    if not yes and not click.confirm("Continue?", default=False, err=True):
+        raise typer.Exit(EXIT_TOOL_FAILED)
+    try:
+        result = deploy_module.deploy(loaded, artifacts, aws.clients, say=lambda m: _err(f"  {m}"))
+    except deploy_module.DeployError as exc:
+        raise _fail(str(exc)) from exc
+    _err("")
+    _err(f"bootstrap stack {result.bootstrap}, main stack {result.main}.")
+    if loaded.notifications.email:
+        _err(
+            f"AWS has sent a confirmation email to {loaded.notifications.email}. Nothing is "
+            f"delivered until somebody clicks the link in it. `clamper doctor` checks."
+        )
+    else:
+        _err("No notification email is configured. Nobody will hear about a clamp.")
+    _err("Next: `clamper doctor`, then `clamper plan`.")
 
 
 def _ledger(aws: Aws, config: Config) -> Ledger:

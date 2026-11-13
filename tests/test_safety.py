@@ -71,6 +71,11 @@ ALLOWED_OWN_WRITES = {
     # The notification, to the stack's own topic. A failure to send is
     # logged and never fails the run; the clamp is already recorded.
     "enforcer/notify.py": {"publish"},
+    # `clamper deploy`: Clamper's own two stacks, and the enforcer zip into
+    # the bucket the bootstrap stack created for it. Run by a person, with
+    # the deploy policy, and never from the Lambda: deploy.py is not in the
+    # zip it builds.
+    "deploy.py": {"create_stack", "update_stack", "put_object"},
 }
 
 #: boto3 imports allowed outside the client factory, by exact module path.

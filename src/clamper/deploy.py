@@ -25,12 +25,17 @@ import hashlib
 import importlib.metadata
 import io
 import zipfile
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
+
+from botocore.exceptions import BotoCoreError, ClientError, WaiterError
 
 import clamper
 from clamper.core.config import CONFIG_FILENAME, Config
+from clamper.core.names import StackNames
+from clamper.core.session import Clients
 from clamper.core.stack import bootstrap, main
 
 #: Modules and data that exist for a person at a terminal, not for the
@@ -154,3 +159,177 @@ def write_artifacts(artifacts: Artifacts, out: Path) -> list[Path]:
     written[1].write_text(artifacts.main_template, encoding="utf-8")
     written[2].write_bytes(artifacts.zip_bytes)
     return written
+
+
+# --- deploying ----------------------------------------------------------
+
+#: How long to wait for a stack. A first deploy with a DynamoDB table and
+#: point-in-time recovery takes a few minutes; twenty is generous.
+WAIT_DELAY_SECONDS = 10
+WAIT_MAX_ATTEMPTS = 120
+
+#: The main stack names its role, so CloudFormation has to be told it may.
+CAPABILITIES = ["CAPABILITY_NAMED_IAM"]
+
+NO_UPDATES = "No updates are to be performed"
+
+
+class DeployError(RuntimeError):
+    """A deploy step failed. The message says which, and what state it left."""
+
+
+@dataclass(frozen=True)
+class Deployed:
+    bucket: str
+    key: str
+    uploaded: bool
+    bootstrap: str
+    main: str
+
+
+def deploy(
+    config: Config,
+    artifacts: Artifacts,
+    clients: Clients,
+    *,
+    say: Callable[[str], None] = lambda _: None,
+) -> Deployed:
+    """Bootstrap stack, then the zip, then the main stack. Each waits.
+
+    Stops at the first failure: a main stack pointed at a zip that never
+    uploaded would fail anyway, later and less clearly.
+    """
+    names = StackNames(config.stack_name)
+    say(f"bootstrap stack {names.bootstrap_stack}")
+    first = _apply_stack(clients, names.bootstrap_stack, artifacts.bootstrap_template, [], [])
+    bucket = _output(clients, names.bootstrap_stack, "ArtifactBucket")
+
+    say(f"enforcer zip s3://{bucket}/{artifacts.key}")
+    uploaded = _upload(clients, bucket, artifacts)
+
+    say(f"main stack {config.stack_name}")
+    second = _apply_stack(
+        clients,
+        config.stack_name,
+        artifacts.main_template,
+        [
+            {"ParameterKey": "ArtifactBucket", "ParameterValue": bucket},
+            {"ParameterKey": "ArtifactKey", "ParameterValue": artifacts.key},
+        ],
+        CAPABILITIES,
+    )
+    return Deployed(
+        bucket=bucket, key=artifacts.key, uploaded=uploaded, bootstrap=first, main=second
+    )
+
+
+def _apply_stack(
+    clients: Clients,
+    name: str,
+    body: str,
+    parameters: list[dict[str, str]],
+    capabilities: list[str],
+) -> str:
+    """Create or update one stack and wait. Returns what happened."""
+    client = clients.get("cloudformation")
+    exists = _stack_status(clients, name) is not None
+    request: dict[str, Any] = {
+        "StackName": name,
+        "TemplateBody": body,
+        "Parameters": parameters,
+        "Capabilities": capabilities,
+        "Tags": [{"Key": "clamper:component", "Value": "stack"}],
+    }
+    try:
+        if exists:
+            client.update_stack(**request)
+            waiter_name, done = "stack_update_complete", "updated"
+        else:
+            client.create_stack(**request, EnableTerminationProtection=False)
+            waiter_name, done = "stack_create_complete", "created"
+    except ClientError as exc:
+        code, message = _error(exc)
+        if code == "ValidationError" and NO_UPDATES in message:
+            return "unchanged"
+        raise DeployError(
+            f"could not {'update' if exists else 'create'} {name}: {code} - {message}"
+        ) from exc
+    except BotoCoreError as exc:
+        raise DeployError(f"could not reach CloudFormation for {name}: {exc}") from exc
+
+    waiter = client.get_waiter(waiter_name)
+    try:
+        waiter.wait(
+            StackName=name,
+            WaiterConfig={"Delay": WAIT_DELAY_SECONDS, "MaxAttempts": WAIT_MAX_ATTEMPTS},
+        )
+    except WaiterError as exc:
+        status = _stack_status(clients, name) or "unknown"
+        raise DeployError(
+            f"{name} did not finish: it is {status}. The stack's Events tab in the "
+            f"CloudFormation console says which resource failed and why."
+        ) from exc
+    return done
+
+
+def _stack_status(clients: Clients, name: str) -> str | None:
+    client = clients.get("cloudformation")
+    try:
+        stacks = client.describe_stacks(StackName=name).get("Stacks", [])
+    except ClientError as exc:
+        code, message = _error(exc)
+        if code == "ValidationError" and "does not exist" in message:
+            return None
+        raise DeployError(f"could not read stack {name}: {code} - {message}") from exc
+    if not stacks:
+        return None
+    status = str(stacks[0].get("StackStatus") or "")
+    if status == "ROLLBACK_COMPLETE":
+        # A first create that rolled back cannot be updated, only deleted.
+        # Deleting is a person's call, not this tool's.
+        raise DeployError(
+            f"{name} is ROLLBACK_COMPLETE from an earlier failed create. CloudFormation "
+            f"cannot update it; delete it in the console, read why it failed first, and "
+            f"run `clamper deploy` again."
+        )
+    return status
+
+
+def _output(clients: Clients, stack: str, key: str) -> str:
+    client = clients.get("cloudformation")
+    stacks = client.describe_stacks(StackName=stack).get("Stacks", [])
+    for item in (stacks[0].get("Outputs") or []) if stacks else []:
+        if item.get("OutputKey") == key:
+            return str(item.get("OutputValue"))
+    raise DeployError(f"stack {stack} has no {key} output")
+
+
+def _upload(clients: Clients, bucket: str, artifacts: Artifacts) -> bool:
+    """Put the zip, unless that exact key is already there.
+
+    The key is the content's hash, so an object under it is this zip.
+    """
+    client = clients.get("s3")
+    try:
+        client.head_object(Bucket=bucket, Key=artifacts.key)
+        return False
+    except ClientError as exc:
+        code, _ = _error(exc)
+        if code not in {"404", "NoSuchKey", "NotFound"}:
+            raise DeployError(f"could not check s3://{bucket}/{artifacts.key}: {code}") from exc
+    try:
+        client.put_object(
+            Bucket=bucket,
+            Key=artifacts.key,
+            Body=artifacts.zip_bytes,
+            ContentType="application/zip",
+            ServerSideEncryption="AES256",
+        )
+    except (ClientError, BotoCoreError) as exc:
+        raise DeployError(f"could not upload the enforcer zip to s3://{bucket}: {exc}") from exc
+    return True
+
+
+def _error(exc: ClientError) -> tuple[str, str]:
+    error = exc.response.get("Error", {}) if isinstance(exc.response, dict) else {}
+    return str(error.get("Code") or "ClientError"), str(error.get("Message") or "")
