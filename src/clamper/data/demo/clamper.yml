@@ -1,0 +1,40 @@
+# The config `clamper demo` runs with. Enforce mode, so the demo shows a
+# real clamp run end to end - against a fake account that accepts every
+# call. Nothing here reaches AWS.
+version: 1
+mode: enforce
+stack_name: clamper
+regions:
+  - us-east-1
+
+limits:
+  - id: whole-account
+    amount_usd: 1000
+    warn_percent: 80
+    clamp_percent: 100
+  - id: team-ml
+    amount_usd: 500
+    scope:
+      kind: tag
+      tag: team
+      value: ml
+
+targets:
+  managed_tag: clamper:managed
+  managed_tag_value: "true"
+  protect_tag: clamper:protect
+  types:
+    - ec2-instance
+    - autoscaling-group
+    - ecs-service
+    - rds-instance
+    - aurora-cluster
+    - lambda-function
+    - sagemaker-notebook
+
+safety:
+  max_actions_per_run: 50
+  reconcile_hours: 6
+
+notifications:
+  email: oncall@example.com

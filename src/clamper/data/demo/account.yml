@@ -1,0 +1,114 @@
+# A made-up account for `clamper demo`. Account id 123456789012 is AWS's
+# documentation placeholder. Every id below is invented.
+#
+# The resources are chosen to show each thing a report can say: a GPU
+# instance that is the reason this tool exists, things that are clamped,
+# one the fake account refuses to stop, one that is protected, one that is
+# already stopped, one AWS will not stop, Clamper's own function, an
+# untagged instance it never touches, and a SageMaker endpoint it can see
+# and will not touch.
+
+account: "123456789012"
+
+spend:
+  whole-account: {actual: 1240.55, forecast: 1810.00, budget: 1000}
+  team-ml: {actual: 410.20, forecast: null, budget: 500}
+
+# Calls the fake account refuses, by target id, with the error AWS would
+# give. Shows that a failed stop is reported as NOT CLAMPED, never as done.
+refuse:
+  i-0c3d4e5f6a7b8c9d0:
+    code: UnauthorizedOperation
+    message: You are not authorized to perform this operation.
+
+resources:
+  - action: ec2-instance
+    id: i-0a1b2c3d4e5f60718
+    description: p3.8xlarge, running
+    tags: {clamper:managed: "true", team: ml}
+    state: {state: running}
+    price: {family: ec2, type: p3.8xlarge}
+
+  - action: ec2-instance
+    id: i-0c3d4e5f6a7b8c9d0
+    description: g5.2xlarge, running
+    tags: {clamper:managed: "true", team: ml}
+    state: {state: running}
+    price: {family: ec2, type: g5.2xlarge}
+
+  - action: ec2-instance
+    id: i-0e5f6a7b8c9d0e1f2
+    description: m5.xlarge, running
+    tags: {clamper:managed: "true", clamper:protect: "true"}
+    state: {state: running}
+    price: {family: ec2, type: m5.xlarge}
+
+  - action: ec2-instance
+    id: i-0f6a7b8c9d0e1f2a3
+    description: t3.large, stopped
+    tags: {clamper:managed: "true"}
+    unclampable: already stopped
+    price: {family: ec2, type: t3.large}
+
+  - action: ec2-instance
+    id: i-01a2b3c4d5e6f7a8b
+    description: m5.2xlarge, running
+    tags: {}
+    state: {state: running}
+    price: {family: ec2, type: m5.2xlarge}
+
+  - action: autoscaling-group
+    id: batch-workers
+    description: 6 x c5.2xlarge
+    tags: {clamper:managed: "true"}
+    state: {min_size: 2, max_size: 20, desired_capacity: 6}
+    price: {family: ec2, type: c5.2xlarge, count: 6}
+
+  - action: ecs-service
+    id: staging/api
+    description: 4 tasks
+    tags: {clamper:managed: "true"}
+    state: {desired_count: 4}
+
+  - action: rds-instance
+    id: analytics-db
+    description: postgres db.r5.2xlarge
+    tags: {clamper:managed: "true"}
+    state: {status: available}
+    price: {family: rds, type: db.r5.2xlarge}
+
+  - action: rds-instance
+    id: orders-db
+    description: postgres db.r5.xlarge, has a read replica
+    tags: {clamper:managed: "true"}
+    unclampable: >-
+      it has a read replica, and AWS refuses to stop an instance that has one
+    price: {family: rds, type: db.r5.xlarge}
+
+  - action: lambda-function
+    id: thumbnailer
+    description: reserved concurrency not set
+    tags: {clamper:managed: "true"}
+    state: {reserved_concurrent_executions: null}
+
+  - action: lambda-function
+    id: clamper-enforcer
+    description: Clamper's own enforcer
+    tags: {clamper:managed: "true"}
+    state: {reserved_concurrent_executions: null}
+
+  - action: sagemaker-notebook
+    id: research-notebook
+    description: ml.t3.large, InService
+    tags: {clamper:managed: "true", team: ml}
+    state: {status: InService}
+    price: {family: sagemaker, type: ml.t3.large}
+
+unsupported:
+  - kind: SageMaker endpoint
+    id: llm-inference
+    description: ml.g5.4xlarge x 2, InService
+    reason: >-
+      the only way to stop an endpoint's cost is to delete it, and a release
+      would be a rebuild that might fail. Clamper v1 will not touch it
+    price: {family: sagemaker, type: ml.g5.4xlarge, count: 2}

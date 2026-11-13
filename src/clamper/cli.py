@@ -736,6 +736,34 @@ def deploy_command(
     _err("Next: `clamper doctor`, then `clamper plan`.")
 
 
+@app.command()
+def demo(formats: FormatOption = None, output_dir: OutputOption = None) -> None:
+    """A plan and a clamp run against a made-up account. No AWS, no config.
+
+    The real plan, selection, ledger, actuator and reports, against bundled
+    fixtures and a fake account that accepts the calls. Always exits 0.
+    """
+    from clamper import demo as demo_module
+    from clamper.core.report import notification
+
+    chosen = _formats(formats)
+    shown = demo_module.run_demo()
+    if output_dir is not None:
+        _emit(shown.plan, chosen, output_dir)
+        _emit(shown.run.report, chosen, output_dir)
+        return
+    for fmt in chosen:
+        click.echo(render(shown.plan, fmt), nl=False)
+        if fmt == "terminal":
+            click.echo("\n" + "=" * 78 + "\n")
+        click.echo(render(shown.run.report, fmt), nl=False)
+    if chosen == ["terminal"]:
+        click.echo("\n" + "=" * 78)
+        click.echo("\nThe notification that run would send:\n")
+        click.echo(f"Subject: {notification.subject(shown.run.report)}\n")
+        click.echo(notification.body(shown.run.report))
+
+
 def _ledger(aws: Aws, config: Config) -> Ledger:
     """The stack's ledger table, in the stack's region.
 
