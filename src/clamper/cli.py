@@ -41,10 +41,10 @@ from clamper.core.actions import load_registry
 from clamper.core.budgets import Spend, read_spend
 from clamper.core.config import Config, ConfigError, Limit
 from clamper.core.discover import discover
-from clamper.core.ledger import Ledger
+from clamper.core.ledger import CLAMP_ID, Ledger, LedgerError
 from clamper.core.names import StackNames
 from clamper.core.plan import build_plan
-from clamper.core.report import EXTENSIONS, FORMATS, model, render
+from clamper.core.report import EXTENSIONS, FORMATS, history, model, render
 from clamper.core.session import Clients, Identity
 from clamper.core.status import build_status
 from clamper.core.targets import SelfIdentity
@@ -310,6 +310,59 @@ def status(
     )
     _emit(report, chosen, output_dir)
     raise typer.Exit(report.exit_code)
+
+
+LedgerFormat = Annotated[
+    str, typer.Option("--format", "-f", help="terminal or json.", show_default=True)
+]
+
+
+@app.command("ledger")
+def ledger_command(
+    clamp_id: Annotated[
+        str | None, typer.Argument(help="Show this clamp run. Omit to list the runs.")
+    ] = None,
+    config: ConfigOption = None,
+    fmt: LedgerFormat = "terminal",
+    limit: Annotated[int, typer.Option("--limit", help="How many runs to list.", min=1)] = 20,
+    profile: ProfileOption = None,
+    region: RegionOption = None,
+    role_arn: RoleOption = None,
+) -> None:
+    """The record of every clamp run, or every entry of one. Read-only.
+
+    Listing exits 0. Showing one run exits 1 if anything in it is still
+    clamped and 2 if an entry's outcome is unknown.
+    """
+    if fmt not in {"terminal", "json"}:
+        raise typer.BadParameter(f"{fmt!r} is not terminal or json.", param_hint="--format")
+    if clamp_id is not None and not CLAMP_ID.match(clamp_id):
+        raise _fail(
+            f"{clamp_id!r} is not a clamp id. They look like 20261113t153000z-a1b2c3; "
+            f"`clamper ledger` lists them."
+        )
+    loaded = _load_config(config)
+    aws = _aws(profile, region, role_arn)
+    store = _ledger(aws, loaded)
+    try:
+        if clamp_id is None:
+            clamps = store.history(limit=limit)
+            click.echo(
+                history.history_json(clamps)
+                if fmt == "json"
+                else history.history_text(clamps, store.table_name),
+                nl=False,
+            )
+            raise typer.Exit(0)
+        found = store.clamp(clamp_id)
+    except LedgerError as exc:
+        raise _fail(str(exc)) from exc
+    if found is None:
+        raise _fail(f"no clamp {clamp_id} in {store.table_name}. `clamper ledger` lists them.")
+    click.echo(history.clamp_json(found) if fmt == "json" else history.clamp_text(found), nl=False)
+    if found.unknown:
+        raise typer.Exit(EXIT_TOOL_FAILED)
+    raise typer.Exit(1 if found.active else 0)
 
 
 def _ledger(aws: Aws, config: Config) -> Ledger:
