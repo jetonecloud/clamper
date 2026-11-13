@@ -34,7 +34,9 @@ def render(report: model.Report) -> str:
         + (f", regions {', '.join(report.regions)}" if report.regions else "")
     )
     out.append(f"generated {report.generated_at} by clamper {__version__}")
-    if report.dry_run and report.kind != model.KIND_PLAN:
+    # Plan and status change nothing in any mode, so the banner would only
+    # suggest that something else might have.
+    if report.dry_run and report.kind in {model.KIND_RUN, model.KIND_RELEASE}:
         out.append("DRY-RUN: nothing was changed.")
 
     if report.limits:

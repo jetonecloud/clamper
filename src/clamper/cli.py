@@ -41,9 +41,12 @@ from clamper.core.actions import load_registry
 from clamper.core.budgets import Spend, read_spend
 from clamper.core.config import Config, ConfigError, Limit
 from clamper.core.discover import discover
+from clamper.core.ledger import Ledger
+from clamper.core.names import StackNames
 from clamper.core.plan import build_plan
 from clamper.core.report import EXTENSIONS, FORMATS, model, render
 from clamper.core.session import Clients, Identity
+from clamper.core.status import build_status
 from clamper.core.targets import SelfIdentity
 
 app = typer.Typer(
@@ -279,6 +282,43 @@ def plan(
     )
     _emit(report, chosen, output_dir)
     raise typer.Exit(report.exit_code)
+
+
+@app.command()
+def status(
+    config: ConfigOption = None,
+    formats: FormatOption = None,
+    output_dir: OutputOption = None,
+    profile: ProfileOption = None,
+    region: RegionOption = None,
+    role_arn: RoleOption = None,
+) -> None:
+    """How close each limit is, and what Clamper has stopped right now. Read-only.
+
+    Exit 1 if anything is clamped, 2 if a clamp's outcome is unknown or
+    something could not be read.
+    """
+    loaded = _load_config(config)
+    chosen = _formats(formats)
+    aws = _aws(profile, region, role_arn)
+    report = build_status(
+        loaded,
+        read_spend=_spend_reader(aws, loaded),
+        ledger=_ledger(aws, loaded),
+        actor=aws.actor,
+        account=aws.identity.account,
+    )
+    _emit(report, chosen, output_dir)
+    raise typer.Exit(report.exit_code)
+
+
+def _ledger(aws: Aws, config: Config) -> Ledger:
+    """The stack's ledger table, in the stack's region.
+
+    Named from the stack name by the same function the template uses, so
+    the CLI and the stack cannot disagree about where the record is.
+    """
+    return Ledger(aws.clients, StackNames(config.stack_name).table)
 
 
 def _spend_reader(aws: Aws, config: Config) -> Callable[[Limit], Spend]:
