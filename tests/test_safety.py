@@ -53,6 +53,32 @@ READ_PREFIXES = (
 )
 PAGINATION = {"get_paginator", "can_paginate", "paginate"}
 
+#: Non-read calls that specific modules are allowed to make, on Clamper's
+#: OWN infrastructure, with the reason. Pinned, so a new one is a diff
+#: somebody reviews.
+#:
+#: These are a genuinely different category from the actions in actions.yml.
+#: `put_item` writes to the ledger table the stack created for Clamper to
+#: write to; `publish` sends a notification to Clamper's own topic. Neither
+#: touches a resource anybody is paying for. The strict test below has no
+#: exceptions at all and covers the services that do.
+ALLOWED_OWN_WRITES = {
+    # The ledger. put_item only: there is no update path (an entry is
+    # rewritten whole so a settle cannot half-apply) and deliberately no
+    # delete, which is how "the ledger is never pruned" is a property of the
+    # code rather than a promise in a document.
+    "core/ledger.py": {"put_item"},
+}
+
+#: boto3 imports allowed outside the client factory, by exact module path.
+#: `boto3.dynamodb.types` is a pure data converter with no client, session or
+#: network surface — it maps Python values to DynamoDB's attribute-value
+#: shape. Hand-rolling that conversion is about 25 lines of bug-prone code
+#: for no gain.
+ALLOWED_BOTO3_IMPORTS = {
+    "core/ledger.py": {"boto3.dynamodb.types"},
+}
+
 #: Destructive AWS operations, by their real boto3 names. Not a pattern: a
 #: pattern over verb prefixes would flag `release_call` and `remove_prefix`
 #: and get itself suppressed. These are the calls that would actually lose
@@ -177,35 +203,132 @@ def test_getattr_dispatch_happens_only_in_the_actuator() -> None:
     assert offenders == [], f"dynamic getattr outside the actuator: {offenders}"
 
 
-def test_every_client_call_outside_the_actuator_is_a_read() -> None:
+def _client_calls(name: str, tree: ast.Module) -> list[tuple[int, str, str]]:
+    """Every `<client-ish>.<method>()` in a module, with the service if known.
+
+    Two ways a call is recognised as being on a boto3 client, and both rely
+    on a convention this package keeps and `CONTRIBUTING.md` states: a
+    client is bound to a local called `client` or something ending
+    `_client`, and it is obtained from `clients.get("<service>")` with a
+    literal service name.
+
+    The literal is what makes the strict test below possible: it is how a
+    static check can tell `clients.get("ec2")` from `clients.get("dynamodb")`
+    and hold only the first to the no-exceptions rule.
+    """
+    services: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+            continue
+        target = node.targets[0]
+        value = node.value
+        if (
+            isinstance(target, ast.Name)
+            and isinstance(value, ast.Call)
+            and isinstance(value.func, ast.Attribute)
+            and value.func.attr == "get"
+            and value.args
+            and isinstance(value.args[0], ast.Constant)
+            and isinstance(value.args[0].value, str)
+        ):
+            services[target.id] = value.args[0].value
+
+    calls: list[tuple[int, str, str]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+            continue
+        owner = node.func.value
+        if not isinstance(owner, ast.Name):
+            continue
+        if owner.id != "client" and not owner.id.endswith("_client"):
+            continue
+        calls.append((node.lineno, node.func.attr, services.get(owner.id, "")))
+    return calls
+
+
+def test_no_resource_service_is_written_to_outside_the_actuator() -> None:
+    """The strict version, with no exceptions anywhere.
+
+    Every service named in `actions.yml` — ec2, autoscaling, ecs, rds,
+    lambda, sagemaker — is a service somebody is paying for. A non-read call
+    on a client for one of those, outside the actuator, is a second write
+    path to a customer's infrastructure and there is no module that gets to
+    have one.
+    """
+    resource_services = {action.client for action in load_registry().actions}
+    offenders: list[str] = []
+    for name, tree in trees():
+        if name == WRITE_PATH:
+            continue
+        for lineno, method, service in _client_calls(name, tree):
+            if service not in resource_services:
+                continue
+            if method in PAGINATION or method.startswith(READ_PREFIXES):
+                continue
+            offenders.append(f"{name}:{lineno} {service}.{method}()")
+    assert offenders == [], (
+        f"writes to a billed AWS service outside {WRITE_PATH}: {offenders}. "
+        f"Route the call through Actuator.invoke with a declared action."
+    )
+
+
+def test_every_other_client_call_is_a_read_or_a_pinned_exception() -> None:
     """The brief's check, implemented: scan for boto3 client methods that are
     not Describe/Get/List.
 
-    Relies on a convention the package keeps and `CONTRIBUTING.md` states: a
-    boto3 client is bound to a local called `client` or something ending
-    `_client`. That makes "a call on a client" statically visible, which is
-    what lets this test exist at all.
+    Clamper's own infrastructure — the ledger table, the topic, the stack —
+    has to be written to by something, so this one has exceptions. They are
+    per-module, per-method, and pinned in `ALLOWED_OWN_WRITES` with the
+    reason beside each.
     """
     offenders: list[str] = []
     for name, tree in trees():
         if name == WRITE_PATH:
             continue
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
-                continue
-            target = node.func.value
-            if not isinstance(target, ast.Name):
-                continue
-            if target.id != "client" and not target.id.endswith("_client"):
-                continue
-            method = node.func.attr
+        allowed = ALLOWED_OWN_WRITES.get(name, set())
+        for lineno, method, _ in _client_calls(name, tree):
             if method in PAGINATION or method.startswith(READ_PREFIXES):
                 continue
-            offenders.append(f"{name}:{node.lineno} {target.id}.{method}()")
+            if method in allowed:
+                continue
+            offenders.append(f"{name}:{lineno} .{method}()")
     assert offenders == [], (
-        f"non-read calls on a boto3 client outside {WRITE_PATH}: {offenders}. "
-        f"Route the call through Actuator.invoke with a declared action."
+        f"non-read client calls that are not pinned exceptions: {offenders}. "
+        f"If this is a write to Clamper's own infrastructure, add it to "
+        f"ALLOWED_OWN_WRITES with a reason. If it is a write to somebody's "
+        f"resources, route it through Actuator.invoke."
     )
+
+
+def test_the_ledger_can_write_but_never_delete() -> None:
+    """ "The ledger is never pruned", as a property of the code.
+
+    This is the test that keeps it true. If a `delete_item` or a TTL
+    attribute ever appears, a clamp can become unreleasable because the
+    record of what to restore expired.
+    """
+    assert ALLOWED_OWN_WRITES["core/ledger.py"] == {"put_item"}
+
+    forbidden = {"delete_item", "delete_table", "batch_write_item", "update_time_to_live"}
+    tree = ast.parse((PACKAGE / "core" / "ledger.py").read_text(encoding="utf-8"))
+    offenders: list[str] = []
+    for node in ast.walk(tree):
+        # AST rather than a text search. A text search trips on the module's
+        # own prose about never deleting, which is how the first version of
+        # this test failed.
+        if isinstance(node, ast.Attribute) and node.attr in forbidden:
+            offenders.append(f".{node.attr} at line {node.lineno}")
+        elif isinstance(node, ast.Constant) and node.value in forbidden:
+            offenders.append(f"{node.value!r} at line {node.lineno}")
+    assert offenders == [], f"the ledger must never delete: {offenders}"
+
+
+def test_the_pinned_exception_modules_exist() -> None:
+    """Otherwise a rename silently widens the exception list to nothing,
+    which looks the same as the check passing."""
+    existing = {name for name, _ in trees()}
+    for name in ALLOWED_OWN_WRITES:
+        assert name in existing, f"{name} is pinned in ALLOWED_OWN_WRITES but does not exist"
 
 
 # --- 3: destructive operations ------------------------------------------
@@ -318,16 +441,23 @@ def test_boto3_is_imported_only_where_it_is_needed() -> None:
     growing an AWS dependency it should not have."""
     importers = set()
     for name, tree in trees():
+        if name == CLIENT_FACTORY:
+            continue
         for node in ast.walk(tree):
             names: list[str] = []
             if isinstance(node, ast.Import):
                 names = [alias.name for alias in node.names]
             elif isinstance(node, ast.ImportFrom) and node.module:
                 names = [node.module]
-            if any(item.split(".")[0] == "boto3" for item in names):
-                importers.add(name)
-    assert importers == {CLIENT_FACTORY}, (
-        f"boto3 should be imported only by {CLIENT_FACTORY}, found: {sorted(importers)}"
+            for item in names:
+                if item.split(".")[0] != "boto3":
+                    continue
+                if item in ALLOWED_BOTO3_IMPORTS.get(name, set()):
+                    continue
+                importers.add(f"{name}:{node.lineno} imports {item}")
+    assert importers == set(), (
+        f"boto3 belongs to {CLIENT_FACTORY}, bar the pure converters pinned in "
+        f"ALLOWED_BOTO3_IMPORTS. Found: {sorted(importers)}"
     )
 
 
