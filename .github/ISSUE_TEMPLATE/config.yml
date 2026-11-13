@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/jetonecloud/clamper/blob/main/SECURITY.md
+    about: >
+      Do not open a public issue. Email security@jetonecloud.com - especially
+      for anything that could stop a resource it should not, leave a clamp
+      unreleasable, or report a clamp that did not happen as done.
+  - name: Help with your AWS bill
+    url: https://jetonecloud.com/book
+    about: Jet1 does AWS infrastructure, cost work and on-call under an SLA.
