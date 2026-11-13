@@ -47,9 +47,11 @@ from clamper.core.names import StackNames
 from clamper.core.plan import build_plan
 from clamper.core.release import release, release_report
 from clamper.core.report import EXTENSIONS, FORMATS, history, model, render
+from clamper.core.resources import handler_for
 from clamper.core.session import Clients, Identity
 from clamper.core.status import build_status
 from clamper.core.targets import SelfIdentity
+from clamper.enforcer.run import TRIGGER_MANUAL, reconcile
 
 app = typer.Typer(
     name="clamper",
@@ -433,6 +435,69 @@ def release_command(
         account=aws.identity.account,
     )
     _emit(report, chosen, output_dir)
+    raise typer.Exit(report.exit_code)
+
+
+@app.command("clamp")
+def clamp_command(
+    yes: Annotated[
+        bool,
+        typer.Option(
+            "--yes",
+            help="Clamp even if the targets are over safety.max_actions_per_run.",
+        ),
+    ] = False,
+    config: ConfigOption = None,
+    formats: FormatOption = None,
+    output_dir: OutputOption = None,
+    profile: ProfileOption = None,
+    region: RegionOption = None,
+    role_arn: RoleOption = None,
+) -> None:
+    """Run the enforcer's reconcile now, from here, as you.
+
+    The same code the Lambda runs: settle anything pending, re-stop what AWS
+    restarted, read every budget, and clamp if a limit is breached. It acts
+    only on a real breach, and only in `mode: enforce`; in dry-run it records
+    what it would have done. --yes overrides the cap and nothing else.
+    """
+    loaded = _load_config(config)
+    chosen = _formats(formats)
+    aws = _aws(profile, region, role_arn)
+    regions = _regions(loaded, aws)
+    registry = load_registry()
+    clients = aws.clients
+    try:
+        outcome = reconcile(
+            loaded,
+            actuator=Actuator(clients, dry_run=loaded.dry_run, registry=registry),
+            ledger=_ledger(aws, loaded),
+            identity=_self_identity(aws, loaded),
+            read_spend=_spend_reader(aws, loaded),
+            find=lambda actions: discover(clients, actions, regions),
+            live_state=lambda entry: handler_for(registry.get(entry.target.action_id)).live_state(
+                clients, entry
+            ),
+            actor=aws.actor,
+            trigger=TRIGGER_MANUAL,
+            account=aws.identity.account,
+            registry=registry,
+            override_cap=yes,
+        )
+    except LedgerError as exc:
+        raise _fail(str(exc)) from exc
+    report = outcome.report
+    _emit(report, chosen, output_dir)
+    if report.over_cap:
+        _err(
+            f"Nothing was clamped: {len(report.not_acted)} targets is over the cap of "
+            f"{report.cap}. Read the list, then re-run with --yes if it is right."
+        )
+    if outcome.notify:
+        _err(
+            "No notification was sent: a clamp run by hand reports here. The ledger has the "
+            "record, and `clamper status` shows it."
+        )
     raise typer.Exit(report.exit_code)
 
 

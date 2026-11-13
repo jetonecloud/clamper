@@ -356,3 +356,28 @@ def test_dry_run_never_does_housekeeping_writes(
     )
     run(clients_moto, config(mode), spend=10.0, ledger=ledger)
     assert len(ledger.pending()) == 1
+
+
+def test_a_person_can_override_the_cap_and_the_report_says_so(
+    clients_moto: Any, moto_ec2: Any
+) -> None:
+    instances = [launch(moto_ec2, tags=MANAGED) for _ in range(3)]
+    cfg = config(extra="safety:\n  max_actions_per_run: 2\n")
+    registry = load_registry()
+    outcome = reconcile(
+        cfg,
+        actuator=Actuator(clients_moto, dry_run=False),
+        ledger=MemoryLedger(),
+        identity=SelfIdentity("clamper"),
+        read_spend=spend_of(150.0),
+        find=lambda actions: discover(clients_moto, actions, cfg.regions),
+        live_state=lambda entry: handler_for(registry.get(entry.target.action_id)).live_state(
+            clients_moto, entry
+        ),
+        actor="cli:test",
+        override_cap=True,
+    )
+    assert outcome.report.over_cap is False
+    assert outcome.report.stopped_count == 3
+    assert all(state_of(moto_ec2, item) in {"stopping", "stopped"} for item in instances)
+    assert any("overridden by hand" in note for note in outcome.report.notes)

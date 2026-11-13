@@ -336,7 +336,9 @@ Please report these (see [`SECURITY.md`](../SECURITY.md)):
 - **Any way to clamp a resource carrying `clamper:protect`**, or one outside
   the configured scope and selection.
 - **Any way to make Clamper clamp its own stack's resources.**
-- **Any way to exceed `max_actions_per_run`.**
+- **Any way to exceed `max_actions_per_run`** other than a person running
+  `clamper clamp --yes`, which is the documented override and is said in
+  that run's report. The enforcer never passes it.
 - **A failed or unknown-outcome clamp being reported as done**, in any output
   format or notification. Same class of issue as a failed Crosswind scan
   reported as clean: the entire value of the tool is that "stopped 14

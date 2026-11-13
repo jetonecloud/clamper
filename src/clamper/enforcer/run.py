@@ -86,7 +86,14 @@ def reconcile(
     account: str | None = None,
     registry: Registry | None = None,
     now: datetime | None = None,
+    override_cap: bool = False,
 ) -> Outcome:
+    """One run. See the module docstring for the order.
+
+    `override_cap` exists for one caller: a person running
+    `clamper clamp --yes` after reading a run that was held over the cap.
+    The Lambda never passes it, so the cap always binds an unattended run.
+    """
     registry = registry if registry is not None else load_registry()
     moment = now or datetime.now(UTC)
     mode = MODE_DRY_RUN if actuator.dry_run else MODE_ENFORCE
@@ -117,6 +124,7 @@ def reconcile(
     errors.extend(f"limit {item.limit.id}: {item.reason}" for item in decisions if item.unknown)
 
     clamp_id: str | None = None
+    overridden = 0
     selection: Selection | None = None
     found: Discovery | None = None
     already_reported = False
@@ -127,6 +135,9 @@ def reconcile(
         found = find(enabled)
         errors.extend(error.label for error in found.errors)
         selection = select(found.candidates, config, breached, identity, registry=registry)
+        if override_cap and selection.over_cap:
+            overridden = len(selection.targets)
+            selection = replace(selection, over_cap=False)
         dropped = [
             lines.from_dropped(item)
             for item in selection.dropped
@@ -182,7 +193,7 @@ def reconcile(
         over_cap=bool(selection and selection.over_cap),
         clamp_id=clamp_id,
         errors=tuple(errors),
-        notes=_notes(already_reported, actuator.dry_run),
+        notes=_notes(already_reported, actuator.dry_run, overridden, config),
     )
     return Outcome(
         report=report,
@@ -447,8 +458,16 @@ def _worth_telling(
     return bool(report.breached and report.errors)
 
 
-def _notes(already_reported: bool, dry_run: bool) -> tuple[str, ...]:
+def _notes(
+    already_reported: bool, dry_run: bool, overridden: int, config: Config
+) -> tuple[str, ...]:
     notes: list[str] = []
+    if overridden:
+        notes.append(
+            f"{overridden} targets is over the cap of {config.safety.max_actions_per_run}. "
+            f"The cap was overridden by hand with `clamper clamp --yes`; the scheduled "
+            f"enforcer is still bound by it."
+        )
     if dry_run:
         notes.append(
             "mode is dry-run: nothing was stopped. These are the resources Clamper would "
