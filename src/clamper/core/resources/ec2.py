@@ -22,6 +22,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from botocore.exceptions import ClientError
+
 from clamper.core.cost import ec2_price
 from clamper.core.ledger import Entry
 from clamper.core.resources.base import (
@@ -38,6 +40,9 @@ from clamper.core.session import Clients
 #: AWS refuses to stop an instance that is still starting, so including it
 #: would produce a failed clamp instead of a skip with a reason.
 STOPPABLE = frozenset({"running"})
+
+#: States that mean the instance no longer exists in any restorable sense.
+GONE = frozenset({"shutting-down", "terminated"})
 
 #: States that mean somebody or something already stopped it. Not a target,
 #: and not a failure either.
@@ -136,10 +141,23 @@ class Ec2InstanceHandler(Handler):
 
     def live_state(self, clients: Clients, entry: Entry) -> Mapping[str, Any] | None:
         client = clients.get("ec2", region=entry.target.region)
-        response = client.describe_instances(InstanceIds=[entry.target.target_id])
+        try:
+            response = client.describe_instances(InstanceIds=[entry.target.target_id])
+        except ClientError as exc:
+            # EC2 answers an unknown id with an error rather than an empty
+            # list. That is "gone", not a failure to read.
+            error = exc.response.get("Error", {}) if isinstance(exc.response, dict) else {}
+            if str(error.get("Code") or "") == "InvalidInstanceID.NotFound":
+                return None
+            raise
         for reservation in response.get("Reservations", []):
             for instance in reservation.get("Instances", []):
-                return {"state": str(instance.get("State", {}).get("Name") or "unknown")}
+                state = str(instance.get("State", {}).get("Name") or "unknown")
+                if state in GONE:
+                    # A terminated instance stays visible for about an hour.
+                    # It is gone for every purpose that matters here.
+                    return None
+                return {"state": state}
         return None
 
     def clamp_params(self, candidate: Candidate) -> dict[str, Any]:
