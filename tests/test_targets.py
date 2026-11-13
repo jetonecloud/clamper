@@ -302,3 +302,75 @@ def test_targets_are_ordered_most_expensive_first() -> None:
         "i-0000000000000000a",
         "i-0000000000000000b",
     ]
+
+
+# --- the stack's resource list, as the CLI reads it ---------------------
+
+
+def _cloudformation() -> Any:
+    import boto3
+
+    from clamper.core.session import Clients
+
+    session = boto3.Session(region_name="us-east-1")
+    clients = Clients(session, default_region="us-east-1")
+    client = session.client("cloudformation", region_name="us-east-1")
+    clients.stub("cloudformation", client)
+    return clients, client
+
+
+def test_from_stack_reads_the_physical_ids() -> None:
+    from botocore.stub import Stubber
+
+    clients, client = _cloudformation()
+    with Stubber(client) as stub:
+        stub.add_response(
+            "list_stack_resources",
+            {
+                "StackResourceSummaries": [
+                    {
+                        "LogicalResourceId": "Enforcer",
+                        "PhysicalResourceId": "clamper-enforcer",
+                        "ResourceType": "AWS::Lambda::Function",
+                        "LastUpdatedTimestamp": "2026-11-13T00:00:00Z",
+                        "ResourceStatus": "CREATE_COMPLETE",
+                    }
+                ]
+            },
+            {"StackName": "clamper"},
+        )
+        identity = SelfIdentity.from_stack(clients, "clamper")
+    assert identity.resource_ids == frozenset({"clamper-enforcer"})
+    assert identity.read_error is None
+
+
+def test_a_stack_that_does_not_exist_yet_is_not_an_error() -> None:
+    from botocore.stub import Stubber
+
+    clients, client = _cloudformation()
+    with Stubber(client) as stub:
+        stub.add_client_error(
+            "list_stack_resources",
+            service_error_code="ValidationError",
+            service_message="Stack with id clamper does not exist",
+        )
+        identity = SelfIdentity.from_stack(clients, "clamper")
+    assert identity.resource_ids == frozenset()
+    assert identity.read_error is None
+
+
+def test_an_unreadable_stack_is_reported_not_treated_as_empty() -> None:
+    from botocore.stub import Stubber
+
+    clients, client = _cloudformation()
+    with Stubber(client) as stub:
+        stub.add_client_error(
+            "list_stack_resources",
+            service_error_code="AccessDenied",
+            service_message="no",
+        )
+        identity = SelfIdentity.from_stack(clients, "clamper")
+    assert identity.read_error is not None
+    assert "AccessDenied" in identity.read_error
+    # The by-name check still recognises the enforcer.
+    assert identity.excludes(fn("clamper-enforcer")) is not None

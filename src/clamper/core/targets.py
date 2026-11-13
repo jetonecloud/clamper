@@ -40,11 +40,14 @@ import os
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 
+from botocore.exceptions import BotoCoreError, ClientError
+
 from clamper.core.actions import Registry, load_registry
 from clamper.core.config import Config, Limit
 from clamper.core.names import StackNames
 from clamper.core.resources import Candidate
-from clamper.core.resources.base import STACK_TAG
+from clamper.core.resources.base import STACK_TAG, paginate
+from clamper.core.session import Clients
 
 #: Why a candidate was dropped. Each is a category in every report.
 DROP_OUT_OF_SCOPE = "out-of-scope"
@@ -80,6 +83,9 @@ class SelfIdentity:
     stack_name: str
     resource_ids: frozenset[str] = frozenset()
     checks: tuple[str, ...] = SELF_CHECKS
+    #: Set when the stack's resource list could not be read, so check 2 has
+    #: nothing to compare against. Reported, never treated as "no resources".
+    read_error: str | None = None
 
     @property
     def names(self) -> frozenset[str]:
@@ -98,6 +104,43 @@ class SelfIdentity:
             item.strip() for item in env.get(ENV_STACK_RESOURCES, "").split(",") if item.strip()
         )
         return cls(stack_name=stack, resource_ids=ids)
+
+    @classmethod
+    def from_stack(cls, clients: Clients, stack_name: str) -> SelfIdentity:
+        """The identity as the CLI sees it: the stack's own resource list.
+
+        Read with the operator's credentials, which may read the stack. A
+        stack that does not exist yet contributes no ids, which is not a
+        problem: there is nothing of Clamper's to clamp yet. A list that could
+        not be read is different, and `read_error` says so, so the CLI can
+        tell somebody that one of the three checks is not in force. The
+        stack-tag and by-name checks still hold either way.
+        """
+        ids: set[str] = set()
+        try:
+            for page in paginate(
+                clients,
+                "cloudformation",
+                "list_stack_resources",
+                clients.default_region or "",
+                StackName=stack_name,
+            ):
+                for item in page.get("StackResourceSummaries", []):
+                    physical = str(item.get("PhysicalResourceId") or "")
+                    if physical:
+                        ids.add(physical)
+        except ClientError as exc:
+            error = exc.response.get("Error", {}) if isinstance(exc.response, dict) else {}
+            message = str(error.get("Message") or "")
+            if error.get("Code") == "ValidationError" and "does not exist" in message:
+                return cls(stack_name=stack_name)
+            return cls(
+                stack_name=stack_name,
+                read_error=f"{error.get('Code') or 'ClientError'} - {message}".strip(" -"),
+            )
+        except BotoCoreError as exc:
+            return cls(stack_name=stack_name, read_error=str(exc))
+        return cls(stack_name=stack_name, resource_ids=frozenset(ids))
 
     def excludes(self, candidate: Candidate) -> str | None:
         """Why this candidate is Clamper's own, or `None` if it is not."""

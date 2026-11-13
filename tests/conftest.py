@@ -31,7 +31,7 @@ from collections.abc import Callable, Iterator
 from typing import Any
 
 import pytest
-from support import ACCOUNT, REGION
+from support import ACCOUNT, REGION, STACK
 
 #: A counter, so each test gets a table name of its own even within a run.
 _TABLE_NUMBERS = itertools.count(1)
@@ -171,15 +171,8 @@ def moto_sns(aws_client: Callable[[str], Any]) -> Any:
 # --- the ledger ---------------------------------------------------------
 
 
-@pytest.fixture()
-def dynamodb_table(moto_dynamodb: Any) -> str:
-    """The ledger table, shaped exactly as the stack creates it.
-
-    Including the GSI, because `active()` and `history()` query it and a test
-    against a table without it would pass while the real thing failed.
-    """
-    table = f"clamper-ledger-{next(_TABLE_NUMBERS)}"
-    moto_dynamodb.create_table(
+def create_ledger_table(client: Any, table: str) -> None:
+    client.create_table(
         TableName=table,
         KeySchema=[
             {"AttributeName": "pk", "KeyType": "HASH"},
@@ -203,6 +196,17 @@ def dynamodb_table(moto_dynamodb: Any) -> str:
         ],
         BillingMode="PAY_PER_REQUEST",
     )
+
+
+@pytest.fixture()
+def dynamodb_table(moto_dynamodb: Any) -> str:
+    """The ledger table, shaped exactly as the stack creates it.
+
+    Including the GSI, because `active()` and `history()` query it and a test
+    against a table without it would pass while the real thing failed.
+    """
+    table = f"clamper-ledger-{next(_TABLE_NUMBERS)}"
+    create_ledger_table(moto_dynamodb, table)
     return table
 
 
@@ -226,3 +230,43 @@ def fixed_now(monkeypatch: pytest.MonkeyPatch) -> str:
     stamp = "2026-11-13T15:30:00+00:00"
     monkeypatch.setattr(ledger_module, "_now", lambda: stamp)
     return stamp
+
+
+# --- the CLI against moto -----------------------------------------------
+
+
+@pytest.fixture()
+def operator() -> Any:
+    """The identity the CLI tests run as: a named IAM user, not root."""
+    from clamper.core.session import Identity
+
+    return Identity(account=ACCOUNT, arn=f"arn:aws:iam::{ACCOUNT}:user/ops", user_id="AIDAOPS")
+
+
+@pytest.fixture()
+def cli_aws(monkeypatch: pytest.MonkeyPatch, clients_moto: Any, operator: Any) -> Any:
+    """Point every CLI command at moto, and the stack lookup at nothing.
+
+    `_aws` is the one place the CLI resolves credentials, so replacing it is
+    enough to keep the whole command on moto. The stack's resource list is
+    replaced too: moto's CloudFormation needs optional dependencies this
+    suite does not install, and `from_stack` has its own Stubber tests.
+    """
+    from clamper import cli
+    from clamper.core.targets import SelfIdentity
+
+    aws = cli.Aws(session=None, clients=clients_moto, identity=operator)
+    monkeypatch.setattr(cli, "_aws", lambda *args, **kwargs: aws)
+    monkeypatch.setattr(cli, "_self_identity", lambda _aws, config: SelfIdentity(config.stack_name))
+    return aws
+
+
+@pytest.fixture()
+def stack_ledger(moto_dynamodb: Any, clients_moto: Any) -> Any:
+    """The ledger table under the name the stack gives it, for the CLI."""
+    from clamper.core.ledger import Ledger
+    from clamper.core.names import StackNames
+
+    name = StackNames(STACK).table
+    create_ledger_table(moto_dynamodb, name)
+    return Ledger(clients_moto, name)
