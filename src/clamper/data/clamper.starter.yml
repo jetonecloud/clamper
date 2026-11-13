@@ -1,0 +1,74 @@
+# clamper.yml - what Clamper may stop, and when.
+#
+# Reference: https://github.com/jetonecloud/clamper/blob/main/docs/configuration.md
+#
+# Read this file as production infrastructure, because it is: it decides what
+# gets stopped. Require review on changes to it, and run `clamper plan` (which
+# only reads) before every `clamper deploy`.
+
+version: 1
+
+# dry-run: the enforcer decides, records and notifies, and changes NOTHING.
+# enforce: it stops what the plan says it will stop.
+#
+# Start in dry-run. Move to enforce on purpose, after a plan you have read.
+mode: dry-run
+
+# The CloudFormation stack name. Budgets, the ledger table and the enforcer
+# function are all named after it.
+stack_name: clamper
+
+# Regions to look for resources in. Budgets are account-wide; resources are
+# not. Leave empty to use your default region only.
+regions:
+  - us-east-1
+
+# Monthly limits in USD. Thresholds are percentages of the amount, the same
+# numbers AWS Budgets uses.
+limits:
+  - id: whole-account
+    amount_usd: 500
+    warn_percent: 80
+    clamp_percent: 100
+
+targets:
+  # A resource is a candidate ONLY if it carries this tag with this value, or
+  # is named in a selector below. Nothing else is ever touched.
+  managed_tag: clamper:managed
+  managed_tag_value: "true"
+
+  # Any resource carrying this tag, with any value, is never stopped. Nothing
+  # in this file can override it.
+  protect_tag: clamper:protect
+
+  # Which kinds of resource Clamper may stop. Remove a line to turn it off.
+  types:
+    - ec2-instance
+    - autoscaling-group
+    - ecs-service
+    - rds-instance
+    - aurora-cluster
+    - lambda-function
+    - sagemaker-notebook
+
+  # Opt-in by id rather than by tag. Prefer this in an account where many
+  # people can tag resources: a tag is opt-in anyone who can tag can grant.
+  # selectors:
+  #   - type: ec2-instance
+  #     ids: [i-0123456789abcdef0]
+
+safety:
+  # Above this many targets in one run, Clamper stops NOTHING and tells you.
+  # A plan far bigger than usual is more likely a stray tag than a real need.
+  max_actions_per_run: 50
+  # How often the enforcer re-reads your budgets. Budgets data refreshes up
+  # to three times a day.
+  reconcile_hours: 6
+
+notifications:
+  # Where Clamper says what it stopped. AWS sends a confirmation email first;
+  # nothing arrives until somebody clicks it.
+  # email: you@example.com
+  # The NAME of an SSM SecureString parameter holding a Slack webhook URL.
+  # Never the URL itself: a webhook URL is a credential.
+  # slack_webhook_parameter: /clamper/slack-webhook
