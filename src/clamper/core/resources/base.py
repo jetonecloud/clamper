@@ -30,7 +30,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from clamper.core.actions import PHASE_RELEASE, Action
@@ -74,10 +74,6 @@ class Candidate:
     #: Why not, when `clampable` is false. Always set when it is.
     reason: str | None = None
     price: Price | None = None
-    #: Anything the handler needs to build a call that is not the identifier
-    #: — the ECS cluster ARN, for instance. Carried into the ledger entry so
-    #: a release months later does not need to rediscover it.
-    extra: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.clampable and not self.reason:
@@ -187,7 +183,6 @@ class Handler(ABC):
         clampable: bool = True,
         reason: str | None = None,
         price: Price | None = None,
-        extra: Mapping[str, Any] | None = None,
     ) -> Candidate:
         """A `Candidate` with this handler's identity filled in.
 
@@ -216,7 +211,6 @@ class Handler(ABC):
             clampable=clampable,
             reason=reason,
             price=price,
-            extra=dict(extra or {}),
         )
 
     def unclampable(
