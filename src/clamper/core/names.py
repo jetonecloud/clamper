@@ -29,7 +29,18 @@ class StackNames:
 
     @property
     def topic(self) -> str:
+        """Where the enforcer tells people what it did. People subscribe."""
         return f"{self.stack_name}-notifications"
+
+    @property
+    def alerts_topic(self) -> str:
+        """Where Budgets rings the doorbell. Only the enforcer subscribes.
+
+        A separate topic from `topic`, because the enforcer is subscribed to
+        this one: if it published its own notifications here, every
+        notification would trigger another reconcile.
+        """
+        return f"{self.stack_name}-alerts"
 
     @property
     def role(self) -> str:
@@ -50,4 +61,6 @@ class StackNames:
     @property
     def all(self) -> frozenset[str]:
         """Every name, for the by-name self-exclusion check."""
-        return frozenset({self.function, self.table, self.topic, self.role, self.schedule})
+        return frozenset(
+            {self.function, self.table, self.topic, self.alerts_topic, self.role, self.schedule}
+        )
