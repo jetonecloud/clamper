@@ -107,14 +107,14 @@ infrastructure, because it is. Require review on it, and do not run
 example workflow runs `clamper plan` — which is read-only — and nothing else,
 for exactly this reason.
 
-### Someone publishes to the SNS topic
+### Someone publishes to the SNS alerts topic
 
-The topic triggers the enforcer. Anyone who can publish to it can make the
+The alerts topic triggers the enforcer. Anyone who can publish to it can make the
 enforcer run.
 
 **That is deliberately uninteresting**, and it is the main reason the SNS
 payload is not parsed. The message is a doorbell. `reconcile()` calls
-`budgets:DescribeBudget` and decides from what AWS reports *now*:
+`DescribeBudget` and decides from what AWS reports *now*:
 
 - A spoofed "you have breached $5000" message causes a reconcile that reads
   the real spend, finds no breach, and does nothing.
@@ -190,8 +190,8 @@ So self-exclusion is three independent checks rather than one, in
 
 1. The resource carries `aws:cloudformation:stack-name` equal to the stack's.
 2. The resource's ARN appears in the stack's own resource list.
-3. The resource is the enforcer function, the ledger table, the topic or the
-   artifact bucket, matched by name.
+3. The resource is the enforcer function, the ledger table, either topic or
+   the artifact bucket, matched by name.
 
 Any one of them excludes. All three have to fail for the bad outcome, and a
 test asserts each one independently excludes the enforcer with the other two
@@ -332,7 +332,8 @@ Please report these (see [`SECURITY.md`](../SECURITY.md)):
 - **Any mutating AWS call that does not go through `core/actuator.py`**, or
   any way to make the actuator invoke a method that is not in
   `actions.yml`.
-- **Any way to make Clamper act in `dry-run` mode.**
+- **Any way to make Clamper clamp in `dry-run` mode.** (Release is a
+  deliberate human command and ignores `mode`; it has its own `--dry-run`.)
 - **Any way to clamp a resource carrying `clamper:protect`**, or one outside
   the configured scope and selection.
 - **Any way to make Clamper clamp its own stack's resources.**

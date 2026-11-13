@@ -57,28 +57,43 @@ clamper ledger    ----- reads ----->   DynamoDB ledger
 clamper release   --- writes via --->  core/actuator.py
 clamper clamp     --- writes via --->  core/actuator.py
 
-clamper deploy    --- deploys ----->   +-------------------------+
-                                       | CloudFormation stack    |
-                                       |                         |
-                                       |  Budget --> SNS --+     |
-                                       |                   v     |
-                                       |  EventBridge ---> Lambda|
-                                       |   (6h)            |     |
-                                       |                   v     |
-                                       |              actuator   |
-                                       |                   |     |
-                                       |     DynamoDB <----+     |
-                                       |     ledger        |     |
-                                       |                   v     |
-                                       |              SNS --> you|
-                                       +-------------------------+
+clamper deploy    --- deploys ----->   +------------------------------+
+                                       | CloudFormation stack         |
+                                       |                              |
+                                       |  Budget --> SNS alerts --+   |
+                                       |                          v   |
+                                       |  EventBridge --------> Lambda|
+                                       |   (6h)                   |   |
+                                       |                          v   |
+                                       |                     actuator |
+                                       |                          |   |
+                                       |     DynamoDB <-----------+   |
+                                       |     ledger               |   |
+                                       |                          v   |
+                                       |     SNS notifications --> you|
+                                       +------------------------------+
 ```
+
+Two topics, not one. `<stack>-alerts` is where Budgets publishes, and only
+the enforcer subscribes to it. `<stack>-notifications` is where the enforcer
+publishes, and email subscribes to it. With one topic the enforcer would be
+subscribed to its own notifications, and every email it sent would wake it
+up to reconcile again.
 
 The Lambda is the same Python package as the CLI — `src/clamper/enforcer/`
 imports `clamper.core` — so the rules about what may be clamped are written
-once. `clamper simulate` runs the enforcer's own entry point locally against
-a fake event with dry-run forced, which means the thing you test is the
-thing that will run.
+once. `clamper simulate` runs the enforcer's own `reconcile()` locally, with
+real reads, dry-run forced and an in-memory ledger, which means the thing you
+test is the thing that will run. `clamper demo` runs the same function against
+bundled fixtures and no AWS at all.
+
+The Lambda gets its configuration from the zip, not from the stack:
+`clamper deploy` packs your `clamper.yml` beside the `clamper` package, and
+the handler reads it from there (`CLAMPER_CONFIG_PATH` overrides the path,
+for tests). A config change is therefore a new zip, a new content-addressed
+key and a stack update, which needs rights to update the stack — the threat
+model relies on that. The account id comes from the invoked function's ARN
+rather than from STS, so the enforcer's role needs no `sts:*` at all.
 
 ```
 reconcile()                            enforcer/run.py
@@ -227,6 +242,9 @@ EBS volumes.
 
 ### SNS topic requirements
 
+Everything below applies to the **alerts** topic, the one Budgets publishes to.
+The notifications topic is an ordinary topic with an email subscription.
+
 > "Amazon SNS topics must be in the same account as the Budgets you're
 > configuring. Cross-account Amazon SNS isn't supported."
 >
@@ -236,7 +254,8 @@ EBS volumes.
 >
 > — [Creating an Amazon SNS topic for budget notifications](https://docs.aws.amazon.com/cost-management/latest/userguide/budgets-sns-policy.html)
 
-The topic policy AWS documents, which is what the template emits:
+The topic policy AWS documents, which is what the template emits on the
+alerts topic:
 
 ```json
 {
@@ -255,7 +274,7 @@ Both conditions are in the template. Without `aws:SourceAccount` the topic is
 publishable by the Budgets service on behalf of *any* account, which is the
 confused-deputy shape.
 
-The template leaves the topic unencrypted and says why in a comment. An
+The template leaves both topics unencrypted and says why in a comment. An
 encrypted topic needs a KMS key policy granting `budgets.amazonaws.com`, and
 a customer-managed key costs $1/month — more than the rest of Clamper's
 running cost put together. The topic carries budget thresholds and resource
@@ -281,17 +300,20 @@ changing a threshold replaces the budget rather than editing it. Worth
 knowing before you wonder why your budget's history reset.
 
 **Clamper does not parse the SNS message body.** The notification is a
-doorbell: the enforcer treats any message on the topic as a reason to run
-`reconcile()`, and `reconcile()` gets the numbers from `budgets:DescribeBudget`
-itself. The payload format of a budget notification is not a documented,
+doorbell: the enforcer treats any message on the alerts topic as a reason to
+run `reconcile()`, and `reconcile()` gets the numbers from `DescribeBudget`
+itself. (The IAM permission behind the `DescribeBudget` API is
+`budgets:ViewBudget`; there is no `budgets:DescribeBudget` action.)
+The payload format of a budget notification is not a documented,
 versioned contract, and a tool that stops your production database off the
 back of a regex over an unversioned string is a tool that will one day stop
 your production database for the wrong reason.
 
 It costs one API call and buys three things: SNS and EventBridge become the
-same code path, a replayed or spoofed message cannot invent a breach, and the
-decision always rests on the number AWS reports now rather than the number in
-a message of unknown age.
+same code path (the event is read only to tell which one woke it), a
+replayed or spoofed message cannot invent a breach, and the decision always
+rests on the number AWS reports now rather than the number in a message of
+unknown age.
 
 ### Cost allocation tag filters
 
@@ -350,7 +372,7 @@ handful of clamps a year.
 | Thing | Rate | Monthly |
 |---|---|---|
 | AWS Budgets, one cost budget | Free. "You can monitor and receive notifications on your budgets free of charge." ([pricing](https://aws.amazon.com/aws-cost-management/aws-budgets/pricing/)) | **$0.00** |
-| `budgets:DescribeBudget` | Not charged | **$0.00** |
+| `DescribeBudget` (`budgets:ViewBudget`) | Not charged | **$0.00** |
 | Lambda, ~124 invocations (4/day) at 256 MB for ~3s | 1M requests and 400,000 GB-s free per month, forever | **$0.00** |
 | DynamoDB ledger, on-demand | A few writes per clamp; 25 GB storage free tier | **$0.00**, under a cent without it |
 | EventBridge scheduled rule | Scheduled rules are not charged | **$0.00** |
@@ -374,7 +396,7 @@ concurrency, and cannot write a ledger.
 ([pricing](https://aws.amazon.com/aws-cost-management/aws-cost-explorer/pricing/)).
 Four reconciles a day across three limits is 360 requests a month — $3.60/month
 to find out what Budgets will tell you for free. Clamper reads
-`budgets:DescribeBudget`, which returns `CalculatedSpend.ActualSpend` and
+`DescribeBudget`, which returns `CalculatedSpend.ActualSpend` and
 `ForecastedSpend` and is not charged. Cost Explorer is used in exactly one
 place: `clamper doctor`'s single `ce:ListCostAllocationTags` call, which is
 a different (free) API, and `clamper plan`'s per-hour figures come from a
@@ -420,6 +442,15 @@ selectors, after `include_untagged`, after an explicit resource ID. There is
 no config key that overrides it and no `--force` that ignores it. A tag you
 can set in the console and be *certain* about is worth more than the
 flexibility of being able to override it.
+
+It is enforced at runtime, in `core/targets.py`, and **not** by an IAM
+`Deny`. That was the original plan and it does not work: for ECS, Auto
+Scaling and Lambda the clamp and the release are the *same* IAM action
+(`ecs:UpdateService`, `autoscaling:UpdateAutoScalingGroup`,
+`lambda:PutFunctionConcurrency`), so a `Deny` on resources carrying the
+protect tag would also deny the release. Somebody tagging a clamped
+resource `clamper:protect` — a natural thing to do in the middle of an
+incident — would make it unreleasable through Clamper.
 
 **Thresholds are percentages of the limit, not absolute amounts.** `warn`
 defaults to 80 and `clamp` to 100. Percentages because that is what Budgets
@@ -621,6 +652,11 @@ resource is read and compared to `applied_state`:
   Reported, left alone, and the entry stays `clamped`. `--force` restores
   anyway, and says in the output that it overrode a conflict.
 
+Release is an explicit human command, so it **ignores `mode`**. A config
+moved back to `dry-run` must never leave a clamp made in `enforce`
+unreleasable. It has its own `--dry-run` instead, which reads every resource
+and writes nothing, not even to the ledger.
+
 Without `applied_state` the check is not possible: "the instance is running"
 could mean "somebody started it" or "the clamp failed", and those need
 opposite handling.
@@ -652,8 +688,12 @@ a resource that was not clamped is never silently absent.
 5. **Not Clamper's own.** Excluded by three independent checks, because this
    one has to hold: the resource is tagged `aws:cloudformation:stack-name`
    with the stack's name; its ARN appears in the stack's own resource list;
-   or it is the enforcer function, the ledger table, the topic or the
-   artifact bucket by name. An enforcer that sets its own reserved
+   or it is the enforcer function, the ledger table, either topic or the
+   artifact bucket by name. The enforcer has no `cloudformation:*`
+   permission, so it reads the stack's resource list from the
+   `CLAMPER_STACK_RESOURCES` environment variable the template sets; the
+   CLI reads it from `ListStackResources`, and says so on stderr if it
+   could not. An enforcer that sets its own reserved
    concurrency to zero cannot release itself, and nothing else can either.
 6. **Clampable now.** An instance already `stopped` is not a target. An RDS
    instance with a read replica is reported as not clamped with the reason,
@@ -674,7 +714,10 @@ holding a release that restores half a system.
 
 Stopping with a notification that says "this is above your cap of 50, here
 is the list, raise the cap or run `clamper clamp --yes` if you meant it"
-keeps the decision with a person for the one case where it matters most. The
+keeps the decision with a person for the one case where it matters most.
+`--yes` overrides the cap and nothing else — protect, scope and
+self-exclusion are all decided before the cap is looked at — and the run's
+report says the cap was overridden by hand. The enforcer never passes it. The
 cost of being wrong in this direction is money; in the other direction it is
 an outage nobody asked for.
 
@@ -687,8 +730,8 @@ an outage nobody asked for.
   resource-scoped for most services because discovery is enumeration.
 - Write actions, each scoped to its resource ARN pattern and conditioned on
   the managed tag with that action's own condition key.
-- The ledger table, the topic, and `budgets:DescribeBudget` on the specific
-  budget ARNs.
+- The ledger table, the notifications topic, and `budgets:ViewBudget` on
+  the specific budget ARNs.
 
 And it refuses to emit:
 
@@ -716,9 +759,18 @@ references it exists.
 Versioned, encrypted with SSE-S3, public access blocked, `BlockPublicPolicy`
 on, and a lifecycle rule expiring old versions after 30 days.
 
-**Main** (`clamper`): the budget, the topic and its policy, the ledger table,
-the enforcer function and its role, the EventBridge rule, and the log group
-with a 30-day retention so logs do not accumulate forever.
+**Main** (`clamper`): one budget per limit, the alerts topic and its policy,
+the notifications topic and its email subscription, the ledger table, the
+enforcer function and its role, the EventBridge rule, and the log group with
+a 30-day retention so logs do not accumulate forever.
+
+`clamper deploy` creates or updates the bootstrap stack, uploads the zip
+under a content-addressed key (the SHA-256 of its bytes, which carry a fixed
+timestamp so the same inputs make the same key), then creates or updates the
+main stack with the bucket and key as parameters, waiting on each. The zip is
+the `clamper` package minus the CLI, the demo and the deploy code, plus
+pure-Python PyYAML with its compiled extension left out, plus your
+`clamper.yml` at the root. boto3 comes from the Lambda runtime.
 
 `clamper deploy --template-only` writes both to a directory and makes **no
 AWS calls at all** — no `sts:GetCallerIdentity`, nothing. You can read the
@@ -751,9 +803,30 @@ that matters is the one that survives being pasted into Slack.
 
 ## Notifications
 
-Plain language, to the SNS topic, saying five things in this order: what
-crossed, which limit, what was clamped, what was **not** and why, and the
-exact `clamper release` command to undo it.
+Plain language, to the notifications topic, saying five things in this
+order: what crossed, which limit, what was clamped, what was **not** and why,
+and the exact `clamper release` command to undo it.
+
+When one goes out, decided in `reconcile()` so the Lambda and a hand-run
+`clamper clamp` agree:
+
+- **Anything Clamper did**, or was stopped from doing by the cap, always: a
+  clamp, a re-stop, a pending entry settled after a crash, a run held over
+  the cap.
+- **A warning only on a run Budgets triggered.** Budgets rings the alerts
+  topic once per threshold per period; the schedule runs four times a day.
+  Warning on every scheduled run would send the same email 120 times a
+  month, and people stop reading an email like that.
+- **In dry-run, once per month per set of targets.** A dry-run account over
+  budget would otherwise get the same "would clamp" email on every
+  reconcile until the month ended. If the same limits would clamp the same
+  targets as a dry run already recorded this month, the run records nothing
+  new and sends nothing.
+- **Errors** when Budgets rang, or when a limit is breached — the cases in
+  which a hole in enforcement matters.
+
+`clamper clamp`, run by hand, sends nothing: the person is looking at the
+report, and the operator policy has no `sns:Publish`.
 
 The release command is in the message because the person reading it at 3am
 did not write the config, may not have Clamper installed, and needs the
