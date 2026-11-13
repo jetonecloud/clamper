@@ -31,9 +31,12 @@ licences are their own:
   PyYAML     MIT
 
 The Lambda deployment package built by `clamper deploy` contains this
-package and nothing else. `boto3` and `botocore` are already present in the
-Lambda Python runtime, and `rich` and `typer` are command-line-only and are
-deliberately excluded — see src/clamper/core/stack/package.py.
+package, minus its command line, demo and deploy code, and the pure-Python
+modules of PyYAML (MIT), whose licence file is included in the package as
+yaml/LICENSE. PyYAML's compiled extension is not included. `boto3` and
+`botocore` are already present in the Lambda Python runtime, and `typer`,
+`click` and `rich` are command-line-only and deliberately excluded. See
+src/clamper/deploy.py.
 
 -------------------------------------------------------------------------------
 
@@ -57,6 +60,6 @@ the tool can honestly promise.
 Test fixtures
 -------------
 
-The fixtures in src/clamper/data/demo/ and tests/fixtures/ describe no real
+The fixtures in src/clamper/data/demo/ and in the tests describe no real
 infrastructure. The account ID 123456789012 is AWS's documentation
 placeholder. No fixture contains a credential.
