@@ -13,6 +13,7 @@ from clamper.core.resources import (
     asg,  # noqa: F401  - imported to register
     ec2,  # noqa: F401  - imported to register
     ecs,  # noqa: F401  - imported to register
+    rds,  # noqa: F401  - imported to register
 )
 from clamper.core.resources.base import (
     Candidate,

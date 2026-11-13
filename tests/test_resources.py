@@ -36,7 +36,7 @@ def _registered_in_a_fresh_process() -> set[str]:
 
 def test_importing_the_package_registers_every_written_handler() -> None:
     registered = _registered_in_a_fresh_process()
-    assert {"ec2-instance", "autoscaling-group", "ecs-service"} <= registered
+    assert {"ec2-instance", "autoscaling-group", "ecs-service", "rds-instance"} <= registered
 
 
 def test_every_registered_handler_is_a_declared_action() -> None:
