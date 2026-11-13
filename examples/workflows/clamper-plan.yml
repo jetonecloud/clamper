@@ -1,0 +1,70 @@
+# A scheduled `clamper plan`, and a plan on every pull request that changes
+# clamper.yml. Copy this into .github/workflows/ and edit the marked lines.
+#
+# It runs `clamper plan` and NOTHING else, on purpose. A plan only reads. A
+# workflow that a pull request can trigger must never run `clamper deploy`,
+# `clamp` or `release`: clamper.yml decides what gets stopped, and a PR is
+# exactly where an untrusted change to it would arrive. Deploy by hand, or
+# from a protected branch with its own review, never from here.
+#
+# What the scheduled run is for: noticing that something silently stopped
+# being protected, or that a script tagged forty instances clamper:managed.
+# The plan lists every protected resource every time.
+#
+# Before it will work you need a role this workflow can assume through
+# GitHub's OIDC provider, with the read statements of the operator policy
+# (iam/operator-policy.example.json): `Discover`, `ReadOwnBudgets` and
+# `OwnStack`. Not the writes. A plan needs none of them.
+
+name: Clamper plan
+
+on:
+  schedule:
+    # 07:00 UTC on weekdays.
+    - cron: "0 7 * * 1-5"
+  pull_request:
+    paths:
+      - clamper.yml
+  workflow_dispatch:
+
+# OIDC needs `id-token: write`. It grants nothing in this repository.
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::111111111111:role/ClamperPlanReadOnly  # <-- edit
+          aws-region: us-east-1                                             # <-- edit
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Clamper, pinned to a release
+        run: pipx install git+https://github.com/jetonecloud/clamper@v0.1.0
+
+      - name: Plan
+        # Exit 1 means a limit is breached right now, which a plan should
+        # report rather than fail the job on. Exit 2 means something could
+        # not be read, and the plan has a hole in it: that fails the job.
+        run: |
+          set +e
+          clamper plan --format markdown --format json --output-dir reports
+          code=$?
+          cat reports/clamper-plan-report.md >> "$GITHUB_STEP_SUMMARY"
+          if [ "$code" -eq 2 ]; then exit 2; fi
+          exit 0
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: clamper-plan
+          path: reports/
+          # The plan names your resources. Keep it briefly.
+          retention-days: 7

@@ -1,0 +1,73 @@
+# An example clamper.yml for a small team's sandbox account: an overall
+# monthly limit, a tighter one on the ML team's tagged spend, and opt-in by
+# both tag and explicit id.
+#
+# Copy it to the root of the repository you deploy from and edit it. Every
+# key is documented in docs/configuration.md.
+#
+# Treat this file as production infrastructure: it decides what gets
+# stopped. Require review on changes to it, and run `clamper plan` (which
+# only reads) before every `clamper deploy`.
+
+version: 1
+
+# Start in dry-run. The enforcer reads, decides, records and notifies, and
+# stops nothing. Change this to `enforce` on purpose, after a plan you have
+# read and at least one dry-run notification you have received.
+mode: dry-run
+
+stack_name: clamper
+
+regions:
+  - us-east-1
+  - eu-west-1
+
+limits:
+  # The whole account. Warn at 80% of $2,000, clamp at 100%.
+  - id: whole-account
+    amount_usd: 2000
+    warn_percent: 80
+    clamp_percent: 100
+
+  # Only spend tagged team=ml. The tag must be ACTIVATED as a cost
+  # allocation tag in the Billing console first, or this budget reads $0.00
+  # forever. `clamper doctor` checks.
+  - id: team-ml
+    amount_usd: 600
+    warn_percent: 75
+    clamp_percent: 100
+    scope:
+      kind: tag
+      tag: team
+      value: ml
+
+targets:
+  managed_tag: clamper:managed
+  managed_tag_value: "true"
+  protect_tag: clamper:protect
+
+  types:
+    - ec2-instance
+    - autoscaling-group
+    - ecs-service
+    - rds-instance
+    - aurora-cluster
+    - lambda-function
+    - sagemaker-notebook
+
+  # Opt-in by id, for resources whose tags too many people can change.
+  selectors:
+    - type: ec2-instance
+      ids: [i-0123456789abcdef0]
+    - type: ecs-service
+      ids: [staging/api]
+
+safety:
+  # Above this many targets in one run, Clamper stops nothing and tells you.
+  max_actions_per_run: 25
+  reconcile_hours: 6
+
+notifications:
+  email: oncall@example.com
+  # The NAME of an SSM SecureString parameter holding a Slack webhook URL.
+  # slack_webhook_parameter: /clamper/slack-webhook
