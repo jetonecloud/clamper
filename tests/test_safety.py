@@ -68,6 +68,9 @@ ALLOWED_OWN_WRITES = {
     # delete, which is how "the ledger is never pruned" is a property of the
     # code rather than a promise in a document.
     "core/ledger.py": {"put_item"},
+    # The notification, to the stack's own topic. A failure to send is
+    # logged and never fails the run; the clamp is already recorded.
+    "enforcer/notify.py": {"publish"},
 }
 
 #: boto3 imports allowed outside the client factory, by exact module path.
