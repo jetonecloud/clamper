@@ -529,15 +529,43 @@ nineteen, and must not be counted as done.
 `tests/test_safety.py` asserts this structurally, because the risk is a
 *second* write path appearing rather than this one changing:
 
-- Every boto3 method named in `actions.yml` appears as a string or attribute
-  in `core/actuator.py` and nowhere else in the package.
-- No module contains an attribute or call whose name starts with
-  `terminate_`, `delete_` (bar the one named exception), `destroy_` or
-  `remove_`.
-- boto3 clients are constructed in `core/session.py` only.
-- The actuator's allowlist equals the registry's, pinned, so widening it has
-  to be a deliberate edit with a reason.
-- No module under `core/` or `enforcer/` imports `rich` or `typer`.
+- **No boto3 method name appears in the Python source at all.** The plan was
+  "the names appear in `actuator.py` and nowhere else"; resolving the method
+  with `getattr(client, name)` where `name` comes from the registry removed
+  the need for them to appear even there, which is a stronger property for
+  less code. A literal `"stop_instances"` anywhere in the package is now
+  either a second dispatch or a comment that should be reworded.
+- **Dynamic `getattr` dispatch happens only in `core/actuator.py`.** A
+  `getattr` with a literal attribute name is a field lookup and is fine
+  anywhere; one with a computed name is the thing that can call anything.
+- **Every call on a boto3 client outside the actuator is a `Describe`/`Get`/
+  `List`.** This is the brief's check, and it is possible only because the
+  package keeps a convention `CONTRIBUTING.md` states: a boto3 client is
+  bound to a local called `client` or something ending `_client`. That makes
+  "a call on a client" statically visible.
+- **No known destructive AWS operation appears anywhere in the package** —
+  `terminate_instances`, `delete_db_instance`, `delete_stack` and thirty
+  others, named one at a time rather than matched as a verb pattern. A
+  pattern over `release_`/`remove_` would flag `release_call` and
+  `remove_prefix` and get itself suppressed, which is how that kind of check
+  dies.
+- **`subprocess`, `eval`, `exec` and unsafe `yaml.load` appear nowhere.**
+  Crosswind needs exactly one subprocess call site, for the Terraform
+  binary. Clamper needs none, so the whole category is banned rather than
+  constrained.
+- **boto3 clients are constructed in `core/session.py` only**, and boto3 is
+  imported only there. A module that can build its own client can call
+  anything on it, which makes the allowlist decoration.
+- **The actuator's allowlist equals the registry's, and the set is pinned**,
+  so widening it has to be a deliberate edit to a test.
+- **No module under `core/` or `enforcer/` imports `rich`, `typer` or
+  `click`.** None of them are in the deployment zip, so a module here that
+  imports one fails at cold start — a bad place to find out.
+
+One test in that file exists because of a gap in Crosswind's equivalent:
+`test_there_are_python_files_to_check`. Every other test is driven by a
+`rglob`, and a refactor that moved the package would turn the whole suite
+green and empty.
 
 ## The ledger
 
