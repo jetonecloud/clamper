@@ -31,6 +31,7 @@ actions:
     title: A thing
     client: ec2
     identifier: ThingId
+    identifier_pattern: '^thing-[0-9]+$'
     arn_pattern: "arn:aws:ec2:*:{account}:thing/*"
     tag_condition: "aws:ResourceTag/"
     reversible: true
@@ -387,3 +388,41 @@ def test_the_registry_is_cached_but_clearable() -> None:
     assert load_registry() is load_registry()
     actions_module.load_registry.cache_clear()
     assert load_registry().ids()
+
+
+# --- identifier shapes --------------------------------------------------
+
+
+@pytest.mark.parametrize("pattern", ["thing-[0-9]+", "^thing-[0-9]+", "thing-[0-9]+$"])
+def test_an_unanchored_identifier_pattern_is_refused(pattern: str) -> None:
+    """An unanchored pattern accepts any string that merely contains a valid
+    id, which is not a check."""
+    with pytest.raises(RegistryError, match="anchored"):
+        loads(broken(("'^thing-[0-9]+$'", f"'{pattern}'")))
+
+
+def test_an_identifier_pattern_that_does_not_compile_is_refused() -> None:
+    with pytest.raises(RegistryError, match="does not compile"):
+        loads(broken(("'^thing-[0-9]+$'", "'^thing-[0-9+$'")))
+
+
+@pytest.mark.parametrize(
+    ("action_id", "good", "bad"),
+    [
+        ("ec2-instance", "i-0abc123def4567890", "i-0abc; rm -rf /"),
+        ("autoscaling-group", "web-asg", "web\nasg"),
+        ("ecs-service", "prod/api", "prod/api/../other"),
+        ("rds-instance", "orders-db", "arn:aws:rds:us-east-1:999999999999:db:orders"),
+        ("aurora-cluster", "reports", "-reports"),
+        ("lambda-function", "retry-loop", "arn:aws:lambda:us-east-1:999999999999:function:x"),
+        ("sagemaker-notebook", "research", "research--"),
+    ],
+)
+def test_every_shipped_action_validates_its_identifiers(
+    action_id: str, good: str, bad: str
+) -> None:
+    """A ledger entry is untrusted input. An ARN in another account, a path
+    traversal or a shell metacharacter in a target id never reaches a call."""
+    action = load_registry().get(action_id)
+    assert action.valid_identifier(good)
+    assert not action.valid_identifier(bad.replace("\\n", "\n"))

@@ -93,6 +93,7 @@ actions:
     title: EC2 instance
     client: ec2
     identifier: InstanceId
+    identifier_pattern: '^i-[0-9a-f]{8,17}$'
     arn_pattern: "arn:aws:ec2:*:{account}:instance/*"
     tag_condition: "aws:ResourceTag/"
     reversible: true
@@ -126,6 +127,7 @@ actions:
     title: Auto Scaling group
     client: autoscaling
     identifier: AutoScalingGroupName
+    identifier_pattern: '^[\w .+=@/-]{1,255}$'
     arn_pattern: "arn:aws:autoscaling:*:{account}:autoScalingGroup:*:autoScalingGroupName/*"
     # Auto Scaling does NOT honour aws:ResourceTag on this action.
     tag_condition: "autoscaling:ResourceTag/"
@@ -164,6 +166,7 @@ actions:
     title: ECS service
     client: ecs
     identifier: service
+    identifier_pattern: '^[A-Za-z0-9_-]{1,255}/[A-Za-z0-9_-]{1,255}$'
     arn_pattern: "arn:aws:ecs:*:{account}:service/*/*"
     tag_condition: "aws:ResourceTag/"
     reversible: true
@@ -195,6 +198,7 @@ actions:
     title: RDS instance
     client: rds
     identifier: DBInstanceIdentifier
+    identifier_pattern: '^[A-Za-z][A-Za-z0-9-]{0,62}$'
     arn_pattern: "arn:aws:rds:*:{account}:db:*"
     tag_condition: "aws:ResourceTag/"
     reversible: true
@@ -232,6 +236,7 @@ actions:
     title: Aurora cluster
     client: rds
     identifier: DBClusterIdentifier
+    identifier_pattern: '^[A-Za-z][A-Za-z0-9-]{0,62}$'
     arn_pattern: "arn:aws:rds:*:{account}:cluster:*"
     tag_condition: "aws:ResourceTag/"
     reversible: true
@@ -265,6 +270,7 @@ actions:
     title: Lambda function
     client: lambda
     identifier: FunctionName
+    identifier_pattern: '^[A-Za-z0-9_-]{1,64}$'
     arn_pattern: "arn:aws:lambda:*:{account}:function:*"
     tag_condition: "aws:ResourceTag/"
     reversible: true
@@ -311,6 +317,7 @@ actions:
     title: SageMaker notebook instance
     client: sagemaker
     identifier: NotebookInstanceName
+    identifier_pattern: '^[A-Za-z0-9](-*[A-Za-z0-9]){0,62}$'
     arn_pattern: "arn:aws:sagemaker:*:{account}:notebook-instance/*"
     tag_condition: "aws:ResourceTag/"
     reversible: true

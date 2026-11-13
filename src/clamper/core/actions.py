@@ -55,6 +55,7 @@ ACTION_KEYS = frozenset(
         "title",
         "client",
         "identifier",
+        "identifier_pattern",
         "arn_pattern",
         "tag_condition",
         "reversible",
@@ -119,6 +120,7 @@ class Action:
     title: str
     client: str
     identifier: str
+    identifier_pattern: str
     arn_pattern: str
     tag_condition: str | None
     discover: tuple[str, ...]
@@ -154,6 +156,16 @@ class Action:
     def restarts_itself(self) -> bool:
         """AWS undoes this clamp on its own after `restart_after_days`."""
         return self.restart_after_days is not None
+
+    def valid_identifier(self, value: str) -> bool:
+        """Whether `value` has the shape this action's resource ids have.
+
+        Checked on every ledger entry before a release call is built from
+        it, and on every candidate before it can be clamped. The second check
+        is the one that matters most: a resource Clamper could stop but not
+        then release would be a clamp with no undo.
+        """
+        return re.fullmatch(self.identifier_pattern, value) is not None
 
     def arn(self, account: str, region: str = "*") -> str:
         return self.arn_pattern.format(account=account, region=region)
@@ -326,6 +338,20 @@ def _action(raw: Any, index: int, verbs: tuple[str, ...], exceptions: frozenset[
             f"ledger entry is validated against before a release is built."
         )
 
+    identifier_pattern = str(raw.get("identifier_pattern", "")).strip()
+    if not (identifier_pattern.startswith("^") and identifier_pattern.endswith("$")):
+        raise RegistryError(
+            f"actions.yml `{where}.identifier_pattern` must be an anchored regular "
+            f"expression (`^...$`). An unanchored one accepts any string that merely "
+            f"contains a valid id, which is not a check."
+        )
+    try:
+        re.compile(identifier_pattern)
+    except re.error as exc:
+        raise RegistryError(
+            f"actions.yml `{where}.identifier_pattern` does not compile: {exc}"
+        ) from exc
+
     arn_pattern = str(raw.get("arn_pattern", "")).strip()
     if not arn_pattern.startswith("arn:"):
         raise RegistryError(
@@ -401,6 +427,7 @@ def _action(raw: Any, index: int, verbs: tuple[str, ...], exceptions: frozenset[
         title=title,
         client=client,
         identifier=identifier,
+        identifier_pattern=identifier_pattern,
         arn_pattern=arn_pattern,
         tag_condition=tag_condition,
         discover=discover,
