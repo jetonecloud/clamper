@@ -334,6 +334,8 @@ class LedgerStore(Protocol):
 
     def active(self) -> tuple[Entry, ...]: ...
 
+    def pending(self) -> tuple[Entry, ...]: ...
+
     def history(self, limit: int = 50) -> tuple[Clamp, ...]: ...
 
 
@@ -524,8 +526,18 @@ class Ledger:
         never pruned gets slower every month and this is the query
         `clamper status` makes every time.
         """
+        return self._entries_with(ACTIVE_STATUSES)
+
+    def pending(self) -> tuple[Entry, ...]:
+        """Entries whose outcome is unknown: a run died between record and
+        settle. The next reconcile reads each one's live state and settles it
+        from what it finds, which is the only way it ever stops being
+        pending."""
+        return self._entries_with(UNKNOWN_STATUSES)
+
+    def _entries_with(self, statuses: tuple[str, ...]) -> tuple[Entry, ...]:
         found: list[Entry] = []
-        for status in ACTIVE_STATUSES:
+        for status in statuses:
             for item in self._query(
                 IndexName=STATUS_INDEX,
                 KeyConditionExpression="#s = :status",
@@ -687,6 +699,9 @@ class MemoryLedger:
 
     def active(self) -> tuple[Entry, ...]:
         return tuple(entry for entry in self._entries.values() if entry.active)
+
+    def pending(self) -> tuple[Entry, ...]:
+        return tuple(entry for entry in self._entries.values() if entry.outcome_unknown)
 
     def history(self, limit: int = 50) -> tuple[Clamp, ...]:
         ordered = sorted(self._clamps.values(), key=lambda clamp: clamp.created_at, reverse=True)

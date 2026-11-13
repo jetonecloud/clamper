@@ -40,6 +40,13 @@ TARGET = Target(
     description="m5.24xlarge in us-east-1",
 )
 
+OTHER_TARGET = Target(
+    action_id="ec2-instance",
+    target_id="i-0fedcba9876543210",
+    region=REGION,
+    title="EC2 instance",
+)
+
 PREVIOUS = {"state": "running"}
 APPLIED = {"state": "stopped"}
 
@@ -122,6 +129,26 @@ def test_a_crash_between_record_and_the_call_leaves_pending(ledger: Ledger) -> N
     assert len(clamp.not_clamped) == 1
     # And what to restore survived the crash.
     assert clamp.unknown[0].previous_state == PREVIOUS
+
+
+def test_a_pending_entry_can_be_found_to_settle_later(ledger: Ledger) -> None:
+    """A crash leaves pending entries, and the next reconcile has to be able
+    to find them without a scan. They are the only input it settles."""
+    clamp_id = new_clamp_id()
+    ledger.open_clamp(a_clamp(clamp_id))
+    ledger.record(clamp_id, TARGET, PREVIOUS, APPLIED)
+    other = ledger.settle(ledger.record(clamp_id, OTHER_TARGET, PREVIOUS, APPLIED), success())
+
+    (pending,) = ledger.pending()
+    assert pending.target == TARGET
+    assert other.status == STATUS_CLAMPED
+    assert [entry.target for entry in ledger.active()] == [OTHER_TARGET]
+
+
+def test_the_memory_ledger_finds_pending_entries_too() -> None:
+    memory = MemoryLedger()
+    memory.record("20261113t153000z-a1b2c3", TARGET, PREVIOUS, APPLIED)
+    assert len(memory.pending()) == 1
 
 
 def test_a_pending_entry_is_not_active(ledger: Ledger) -> None:
