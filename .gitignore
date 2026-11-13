@@ -42,6 +42,8 @@ clamper-plan-*
 clamper-status-*
 clamper-ledger-*
 clamper-report-*
+clamper-run-*
+clamper-release-*
 *.clamper.json
 
 # Build output from `clamper deploy`. The Lambda zip is a build artifact and

@@ -1,0 +1,50 @@
+# Keep the build context small and keep anything sensitive out of it. A
+# Docker build context is readable by every layer, so a stray plan or
+# credentials file in here would be baked into image history.
+
+.git/
+.github/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+build/
+dist/
+*.egg-info/
+
+# Tests, docs and examples are not needed to build the wheel, and excluding
+# them means a docs change does not invalidate the dependency layer.
+tests/
+docs/
+iam/
+examples/
+
+# Clamper output and build artifacts. Reports name your resources and say
+# what is currently stopped; the zip carries somebody's clamper.yml.
+reports/
+clamper-plan-*
+clamper-status-*
+clamper-ledger-*
+clamper-report-*
+clamper-run-*
+clamper-release-*
+*.clamper.json
+.clamper-build/
+clamper-enforcer-*.zip
+/clamper.yml
+/clamper.yaml
+
+# Secrets, defence in depth.
+.aws/
+*.pem
+*.key
+credentials
+.env
+.env.*
