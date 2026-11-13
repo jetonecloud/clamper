@@ -426,11 +426,11 @@ def test_nested_previous_state_round_trips(ledger: Ledger) -> None:
 
 
 def test_a_ledger_write_failure_raises_rather_than_being_swallowed(
-    clients: Any, dynamodb_table: str
+    clients_moto: Any, dynamodb_table: str
 ) -> None:
     """A clamp that cannot be recorded must not happen. An unrecorded clamp
     is an unreleasable one, which is the failure this design exists for."""
-    ledger = Ledger(clients, "a-table-that-does-not-exist")
+    ledger = Ledger(clients_moto, "a-table-that-does-not-exist")
     with pytest.raises(LedgerError) as excinfo:
         ledger.record("20261113t150000z-aaaaaa", TARGET, PREVIOUS, APPLIED)
     assert "Nothing has been clamped" in str(excinfo.value)

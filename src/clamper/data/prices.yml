@@ -1,0 +1,163 @@
+# Indicative per-hour prices, for ordering `clamper plan`.
+#
+# READ THIS BEFORE QUOTING A FIGURE FROM IT
+# -----------------------------------------
+# This table exists so that `clamper plan` can put the expensive thing at the
+# top of the page. The person reading that page during a cost incident has
+# thirty seconds and acts on the first line, so getting the *order* right is
+# most of the value and getting the third decimal place right is almost none.
+#
+# These are us-east-1 on-demand list prices. They are a static table, not a
+# live lookup: `pricing:GetProducts` would be a per-request charge, and the
+# design's whole claim is that Clamper is not a cost of its own.
+#
+# What that means in practice:
+#
+#   * Every figure Clamper prints from this file is rendered with a `~` and
+#     carries the `basis` sentence below.
+#   * Prices change, and this file is a snapshot. Treat a figure as an
+#     order of magnitude, not as a bill.
+#   * An instance type that is not listed here gets NO figure. `clamper plan`
+#     says "price unknown" rather than guessing from the family name. A wrong
+#     number in a report to a manager costs more credibility than the number
+#     was worth — the same rule Preflight and Crosswind follow.
+#   * Savings Plans, Reserved Instances, other regions, EBS, snapshots,
+#     licensing and data transfer are not modelled at all.
+#   * No figure here is ever used to decide whether to clamp. The decision
+#     comes from the budget. This only changes the order of a list.
+#
+# Adding a type is a one-line change and a good first contribution. Please
+# take the figure from the AWS pricing page for us-east-1 on-demand Linux and
+# say in the PR where you read it.
+
+version: 1
+
+basis: >-
+  us-east-1 on-demand list price, Linux, single-AZ, excluding storage,
+  Savings Plans and Reserved Instances
+
+note: >-
+  Indicative figures for ranking targets, from a static table. Not a billing
+  estimate. An unlisted instance type shows no figure rather than a guess.
+
+families:
+  # --- EC2 ------------------------------------------------------------
+  #
+  # The burstable and general-purpose families most accounts run, plus the
+  # GPU families that are the reason this tool exists: a forgotten
+  # p4d.24xlarge is $23,000 a month.
+  ec2:
+    t3.micro: 0.0104
+    t3.small: 0.0208
+    t3.medium: 0.0416
+    t3.large: 0.0832
+    t3.xlarge: 0.1664
+    t3.2xlarge: 0.3328
+
+    m5.large: 0.096
+    m5.xlarge: 0.192
+    m5.2xlarge: 0.384
+    m5.4xlarge: 0.768
+    m5.8xlarge: 1.536
+    m5.12xlarge: 2.304
+    m5.16xlarge: 3.072
+    m5.24xlarge: 4.608
+
+    c5.large: 0.085
+    c5.xlarge: 0.17
+    c5.2xlarge: 0.34
+    c5.4xlarge: 0.68
+    c5.9xlarge: 1.53
+    c5.18xlarge: 3.06
+
+    r5.large: 0.126
+    r5.xlarge: 0.252
+    r5.2xlarge: 0.504
+    r5.4xlarge: 1.008
+    r5.8xlarge: 2.016
+    r5.12xlarge: 3.024
+    r5.24xlarge: 6.048
+
+    # GPU. The expensive end, and the shape of runaway cost.
+    g4dn.xlarge: 0.526
+    g4dn.2xlarge: 0.752
+    g4dn.4xlarge: 1.204
+    g4dn.8xlarge: 2.176
+    g4dn.12xlarge: 3.912
+    g4dn.16xlarge: 4.352
+
+    g5.xlarge: 1.006
+    g5.2xlarge: 1.212
+    g5.4xlarge: 1.624
+    g5.8xlarge: 2.448
+    g5.12xlarge: 5.672
+    g5.24xlarge: 8.144
+    g5.48xlarge: 16.288
+
+    p3.2xlarge: 3.06
+    p3.8xlarge: 12.24
+    p3.16xlarge: 24.48
+    p4d.24xlarge: 32.7726
+
+  # --- RDS ------------------------------------------------------------
+  #
+  # Single-AZ PostgreSQL. `rds_price` applies a 2x multiplier for Multi-AZ,
+  # which is exact for the instance-hour component — the only component a
+  # stop saves. SQL Server and Oracle carry licence costs on top, so their
+  # real figure is higher than this one and never lower.
+  rds:
+    db.t3.micro: 0.018
+    db.t3.small: 0.036
+    db.t3.medium: 0.072
+    db.t3.large: 0.145
+    db.t3.xlarge: 0.29
+    db.t3.2xlarge: 0.58
+
+    db.t4g.micro: 0.016
+    db.t4g.small: 0.032
+    db.t4g.medium: 0.065
+    db.t4g.large: 0.129
+
+    db.m5.large: 0.178
+    db.m5.xlarge: 0.356
+    db.m5.2xlarge: 0.712
+    db.m5.4xlarge: 1.424
+    db.m5.8xlarge: 2.848
+    db.m5.12xlarge: 4.272
+
+    db.r5.large: 0.24
+    db.r5.xlarge: 0.48
+    db.r5.2xlarge: 0.96
+    db.r5.4xlarge: 1.92
+    db.r5.8xlarge: 3.84
+    db.r5.12xlarge: 5.76
+
+  # --- SageMaker notebook instances -----------------------------------
+  #
+  # A notebook left running over a weekend on a GPU instance is the most
+  # common single line item people are surprised by.
+  sagemaker:
+    ml.t3.medium: 0.05
+    ml.t3.large: 0.1008
+    ml.t3.xlarge: 0.2016
+    ml.t3.2xlarge: 0.4032
+
+    ml.m5.large: 0.115
+    ml.m5.xlarge: 0.23
+    ml.m5.2xlarge: 0.461
+    ml.m5.4xlarge: 0.922
+    ml.m5.12xlarge: 2.765
+
+    ml.g4dn.xlarge: 0.7364
+    ml.g4dn.2xlarge: 0.94
+    ml.g4dn.4xlarge: 1.505
+    ml.g4dn.8xlarge: 2.72
+
+    ml.g5.xlarge: 1.408
+    ml.g5.2xlarge: 1.515
+    ml.g5.4xlarge: 2.03
+    ml.g5.12xlarge: 7.09
+
+    ml.p3.2xlarge: 3.825
+    ml.p3.8xlarge: 14.688
+    ml.p3.16xlarge: 28.152
