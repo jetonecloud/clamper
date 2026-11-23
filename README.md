@@ -47,7 +47,7 @@ instead, each of them checked by tests rather than promised in prose.
    that. Including untagged resources takes a key *and* a sentence you have
    to type out.
 2. **Declared up front.** Every write Clamper can make is one row in
-   [`actions.yml`](src/clamper/data/actions.yml) — twelve calls, each with its
+   [`actions.yml`](src/clamper/data/actions.yml) — fourteen calls, each with its
    inverse. The IAM policy is generated from the same file, and a row with a
    terminate or delete verb makes the package refuse to load.
 3. **Recorded before acting.** What a resource was is written to a DynamoDB
@@ -98,17 +98,19 @@ have.
 | Aurora clusters | stop | start |
 | Lambda functions | reserved concurrency to 0 | the recorded value, or no reservation if there was none |
 | SageMaker notebook instances | stop | start |
+| Redshift clusters | pause | resume |
 
 Every one is reversible and none deletes anything. [`docs/actions.md`](docs/actions.md)
 has the details of each, including the ones AWS undoes by itself (RDS
 restarts a stopped instance after seven days; Clamper notices, stops it
 again, and tells you).
 
-Deliberately **not** in v1: SageMaker endpoints (the only way to stop their
-cost is to delete them), EKS node groups (scaling to zero ignores pod
-disruption budgets), anything that terminates or deletes, and anything
-data-plane. `clamper plan` still lists the SageMaker endpoints it finds, with
-their price, so the biggest number stays on the page.
+Deliberately **not** here: SageMaker endpoints and Redshift Serverless
+workgroups (the only way to stop their cost is to delete them), EKS node
+groups (scaling to zero ignores pod disruption budgets), anything that
+terminates or deletes, and anything data-plane. `clamper plan` still lists
+the endpoints and workgroups it finds, so the biggest number stays on the
+page.
 
 ## How it works
 

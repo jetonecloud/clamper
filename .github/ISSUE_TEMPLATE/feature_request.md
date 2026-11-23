@@ -32,6 +32,7 @@ one will probably be closed with a link to this list:
 - **Anything that terminates or deletes.** The registry refuses to load it.
 - **SageMaker endpoints.** The only way to stop their cost is to delete them,
   and the release would be a rebuild that might fail.
+- **Redshift Serverless workgroups.** They have no pause, only delete.
 - **EKS node groups.** Reversible, but scaling to zero ignores pod disruption
   budgets. It needs a design that drains; it is the most likely v2 addition.
 - **Data-plane limits** — data transfer, S3 — and stopping money already

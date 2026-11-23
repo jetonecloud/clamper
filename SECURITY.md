@@ -13,13 +13,13 @@ the policy and the summary.
   resources goes through `Actuator.invoke` in
   [`core/actuator.py`](src/clamper/core/actuator.py), which takes the boto3
   method from [`actions.yml`](src/clamper/data/actions.yml) by action id and
-  never from its caller. Twelve methods in all: seven clamps and their
+  never from its caller. Fourteen methods in all: eight clamps and their
   inverses, some of which share a method.
   [`tests/test_safety.py`](tests/test_safety.py) asserts that no boto3 method
   name appears anywhere in the Python source, that dynamic dispatch happens
   only in the actuator, that every other client call is a read or one of a
   handful of pinned writes to Clamper's own infrastructure, and that the
-  method set is exactly those twelve.
+  method set is exactly those fourteen.
 - **Nothing that terminates or deletes.** A row in `actions.yml` with a
   terminate, delete or other destructive verb makes the package fail to
   import. The single exception, `lambda:DeleteFunctionConcurrency`, removes a
