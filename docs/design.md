@@ -52,7 +52,7 @@ your machine                           your AWS account
 ------------                           ----------------
 
 clamper plan      ----- reads ----->   Budgets, EC2, ASG, ECS,
-clamper status                         RDS, Lambda, SageMaker
+clamper status                         RDS, Lambda, SageMaker, Redshift
 clamper ledger    ----- reads ----->   DynamoDB ledger
 clamper release   --- writes via --->  core/actuator.py
 clamper clamp     --- writes via --->  core/actuator.py
@@ -345,6 +345,7 @@ one. What support exists, and how it was established:
 | `autoscaling:UpdateAutoScalingGroup` | `autoscaling:ResourceTag/` | Auto Scaling uses its **own** key, not `aws:ResourceTag` |
 | `lambda:PutFunctionConcurrency`, `lambda:DeleteFunctionConcurrency` | `aws:ResourceTag/` | Lambda ABAC on the `function` resource |
 | `sagemaker:StopNotebookInstance`, `sagemaker:StartNotebookInstance` | `aws:ResourceTag/` | SageMaker ABAC on `notebook-instance` |
+| `redshift:PauseCluster`, `redshift:ResumeCluster` | `aws:ResourceTag/` | Redshift tag-based access control on `cluster` |
 
 The Auto Scaling row is the one that bites: a policy written with
 `aws:ResourceTag` on `autoscaling:UpdateAutoScalingGroup` is not an error, it
@@ -354,7 +355,7 @@ than inheriting a global default.
 
 **What was not verified first-hand:** the AWS Service Authorization Reference
 pages render their tables with JavaScript and could not be read directly, so
-the six rows above come from service-level ABAC documentation and secondary
+the seven rows above come from service-level ABAC documentation and secondary
 sources rather than from the authorization table itself. That is weaker
 evidence than the quotes earlier in this document, and it is called out here
 rather than presented as equivalent. The consequence of a wrong row is a
@@ -484,7 +485,10 @@ Four consequences of putting this in a data file:
 - **You can read it.** The whole set of things this tool can do to your
   account is one short file.
 
-### v1 actions
+### The actions
+
+The first seven shipped in v0.1.0; Redshift clusters came after, and met
+the same bar: a clamp whose inverse puts back exactly what was recorded.
 
 | Target | Clamp | Release |
 |---|---|---|
@@ -495,9 +499,10 @@ Four consequences of putting this in a data file:
 | Aurora clusters | `StopDBCluster` | `StartDBCluster` |
 | Lambda functions | reserved concurrency → 0 | restore recorded value, or delete the setting if there was none |
 | SageMaker notebook instances | `StopNotebookInstance` | `StartNotebookInstance` |
+| Redshift clusters | `PauseCluster` | `ResumeCluster` |
 
 Every one of these is reversible and none loses data. That is the whole
-selection criterion for v1.
+selection criterion.
 
 ### What is deliberately not here
 
@@ -517,6 +522,11 @@ production inference endpoint is worse than never having stopped it.
 `clamper plan` lists endpoints it found under "not clamped", with this reason,
 so the biggest number on the page is visible even though Clamper will not
 touch it.
+
+**Redshift Serverless workgroups.** A workgroup has no pause: it bills per
+RPU-hour of use, and only deleting it would stop that. `clamper plan` lists
+workgroups under "not clamped" without a price, the same way it lists
+endpoints.
 
 **EKS node groups.** Scaling a managed node group to zero *is* reversible
 (`UpdateNodegroupConfig` with `scalingConfig.desiredSize: 0`, restoring the

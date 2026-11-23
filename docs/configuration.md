@@ -108,7 +108,8 @@ targets:
   managed_tag_value: "true"
   protect_tag: clamper:protect
   types: [ec2-instance, autoscaling-group, ecs-service, rds-instance,
-          aurora-cluster, lambda-function, sagemaker-notebook]
+          aurora-cluster, lambda-function, sagemaker-notebook,
+          redshift-cluster]
   selectors:
     - type: ec2-instance
       ids: [i-0123456789abcdef0]
@@ -119,7 +120,7 @@ targets:
 | `managed_tag` | `clamper:managed` | A resource carrying this tag with `managed_tag_value` is a candidate. |
 | `managed_tag_value` | `"true"` | Quote it: YAML reads a bare `true` as a boolean. |
 | `protect_tag` | `clamper:protect` | A resource carrying this tag, **with any value**, is never stopped. Nothing in this file overrides it, and neither does `--force` or `--yes`. |
-| `types` | all seven | Which action ids may be used. Remove a line to turn a type off. An empty list is an error. |
+| `types` | all eight | Which action ids may be used. Remove a line to turn a type off. An empty list is an error. |
 | `selectors` | none | Opt in by explicit id, per type, without a tag. |
 | `include_untagged` | `false` | See below. |
 | `untagged_acknowledgement` | none | See below. |

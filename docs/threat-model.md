@@ -259,7 +259,7 @@ The role can stop your tagged resources. Anyone who can assume it can too.
   `aws:SourceAccount`. No human principal, no OIDC, no cross-account.
 - Its policy is scoped by tag condition where the service supports one, so
   even holding it does not grant a stop on an untagged resource — for the
-  five of seven actions where that holds. See the table and the caveat in
+  six of eight actions where that holds. See the table and the caveat in
   [`design.md`](design.md#which-iam-actions-support-a-tag-condition).
 - It has no `iam:*`, no `cloudformation:*`, and no ability to change its own
   policy or the stack. An attacker holding it cannot widen it.
@@ -319,7 +319,7 @@ Accepted, and listed so nobody is surprised.
 | A malicious `clamper.yml` can set an absurdly low limit | Inherent: setting the limit is the product. Bounded by opt-in targets, the per-run cap, reversibility, and a loud notification. |
 | Whoever can tag can enrol or un-protect a resource | Inherent to tag-based opt-in. `selectors` is the alternative for accounts where it matters. |
 | A clamp is an outage, and a release is not instant | Inherent. Documented, and `dry-run` is the default so the first run is never the live one. |
-| Two of seven write actions' tag conditions are from secondary sources | Failure mode is a condition that never matches — narrower than intended, not wider. Runtime tag check is the real guard. |
+| Three of eight write actions' tag conditions are from secondary sources | Failure mode is a condition that never matches — narrower than intended, not wider. Runtime tag check is the real guard. |
 | Someone with table write access can delete ledger entries | Resources remain startable by hand; PITR is on. A nuisance, not a loss. |
 | The ledger says what is currently stopped | Inherent to being able to restore it. Treat it as internal. |
 | Publishing to the topic can force a reconcile | The reconcile reads real spend, so it can only act when acting is correct. Denial-of-wallet bounded by Lambda's free tier and cheaper to achieve other ways. |

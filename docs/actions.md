@@ -5,7 +5,7 @@ source of truth is [`actions.yml`](../src/clamper/data/actions.yml): this page
 explains it, and if the two ever disagree the YAML is right and this page is
 a bug.
 
-Each action is a pair of calls, a clamp and its inverse. Twelve boto3 calls
+Each action is a pair of calls, a clamp and its inverse. Fourteen boto3 calls
 in all, pinned by a test, and every one goes through the single write path in
 `core/actuator.py`. The enforcer's IAM policy is generated from the same rows,
 so the permissions Clamper asks for and the things it can do are one list.
@@ -19,6 +19,7 @@ so the permissions Clamper asks for and the things it can do are one list.
 | `aurora-cluster` | `rds:StopDBCluster` | `rds:StartDBCluster` | `status` |
 | `lambda-function` | `lambda:PutFunctionConcurrency`, reserved concurrency 0 | the recorded value, or `lambda:DeleteFunctionConcurrency` if there was none | `reserved_concurrent_executions` |
 | `sagemaker-notebook` | `sagemaker:StopNotebookInstance` | `sagemaker:StartNotebookInstance` | `status` |
+| `redshift-cluster` | `redshift:PauseCluster` | `redshift:ResumeCluster` | `status` |
 
 "Records" is what goes into the ledger *before* the clamp call. It is what
 `clamper release` restores, and what it compares the live resource against
@@ -108,6 +109,25 @@ destructive way to stop a function in a retry loop from costing anything.
   The EBS volume for that directory survives and keeps billing.
 - A running notebook's kernel state is lost, and unsaved work with it.
 
+### Redshift clusters
+
+- A pause suspends on-demand billing for the cluster's nodes. RA3 managed
+  storage and backup storage keep billing, so the saving is the node hours.
+- Queries running at the pause are cancelled and their connections dropped.
+  A resume takes several minutes, and the cluster comes back with a cold
+  result cache.
+- Only a cluster in `available` is paused. One that is resizing, modifying
+  or otherwise mid-change is reported as not clamped with its status, and
+  one that is already paused is reported as such.
+- **A scheduled resume will undo the clamp.** If the cluster has a
+  scheduled action that resumes it (a common way to run a warehouse only
+  in office hours), Redshift resumes it at the next scheduled time and the
+  spend starts again. Clamper does not change or remove schedules; check
+  for one with `aws redshift describe-scheduled-actions`.
+- Reserved nodes bill whether the cluster is paused or not.
+- The price in a plan is the node type's rate times the node count, which
+  is what a pause stops billing.
+
 ## Deliberately not here
 
 **Nothing that terminates or deletes.** A row in `actions.yml` whose method
@@ -122,6 +142,12 @@ has since deleted — a rebuild that might fail, not a restore. A release
 that silently fails to bring back a production inference endpoint is worse
 than never having stopped it. `clamper plan` lists the endpoints it finds,
 priced, under "found, not in v1", so the number stays visible.
+
+**Redshift Serverless workgroups.** A workgroup has no pause. It bills per
+RPU-hour of the queries it runs, and the only thing that would take that
+to zero is deleting it. `clamper plan` lists the workgroups it finds under
+"found, not in v1", without a price, since a base capacity is not a usage
+figure.
 
 **EKS node groups.** Scaling a managed node group to zero is reversible, but
 it evicts pods with no regard for disruption budgets, orphans StatefulSet

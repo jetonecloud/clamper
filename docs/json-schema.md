@@ -36,7 +36,7 @@ different questions.
 | `not_acted` | list of line objects | Opted in and **not** done, each with a reason. Still costing money |
 | `active` | list of line objects | For `status`: what Clamper currently has stopped |
 | `protected` | list of line objects | Every resource carrying the protect tag |
-| `unsupported` | list of line objects | Found and out of v1's reach, e.g. SageMaker endpoints |
+| `unsupported` | list of line objects | Found and out of v1's reach, e.g. SageMaker endpoints and Redshift Serverless workgroups |
 | `errors` | list of strings | Things that could not be checked. Each is a hole in the report |
 | `notes` | list of strings | Caveats a reader needs |
 
