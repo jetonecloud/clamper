@@ -347,3 +347,45 @@ actions:
         way to stop an endpoint's cost is to delete it, and the inverse is a
         rebuild that can fail. `clamper plan` lists endpoints it found as not
         clamped so the biggest number is still visible. See docs/actions.md.
+
+  - id: redshift-cluster
+    title: Redshift cluster
+    client: redshift
+    identifier: ClusterIdentifier
+    identifier_pattern: '^(?=.{1,63}$)[a-z](-?[a-z0-9])*$'
+    arn_pattern: "arn:aws:redshift:*:{account}:cluster:*"
+    tag_condition: "aws:ResourceTag/"
+    reversible: true
+    discover:
+      # DescribeClusters returns each cluster's tags inline, so no separate
+      # tag read is needed.
+      - redshift:DescribeClusters
+    records:
+      - status
+    clamp:
+      # Pausing suspends on-demand compute billing and keeps the cluster, its
+      # data, its endpoint and its configuration. It is Redshift's own
+      # reversible stop, made for exactly this.
+      method: pause_cluster
+      iam: redshift:PauseCluster
+      params: [ClusterIdentifier]
+    release:
+      method: resume_cluster
+      iam: redshift:ResumeCluster
+      params: [ClusterIdentifier]
+    notes:
+      - >-
+        Managed storage (RA3) and backup storage keep billing while the
+        cluster is paused. The saving is the node hours.
+      - >-
+        Queries running at the pause are cancelled and connections dropped.
+        Resuming takes several minutes, and a cluster resumed for the release
+        comes back with a cold cache.
+      - >-
+        A scheduled resume action on the cluster will undo the clamp at its
+        next run. Clamper does not change or remove schedules; check for one
+        with `aws redshift describe-scheduled-actions`.
+      - >-
+        Reserved nodes bill whether the cluster is paused or not. Redshift
+        Serverless workgroups cannot be paused and are listed by `clamper
+        plan` as not clamped.

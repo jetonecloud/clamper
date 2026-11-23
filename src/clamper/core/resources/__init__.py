@@ -15,6 +15,7 @@ from clamper.core.resources import (
     ecs,  # noqa: F401  - imported to register
     lambda_,  # noqa: F401  - imported to register
     rds,  # noqa: F401  - imported to register
+    redshift,  # noqa: F401  - imported to register
     sagemaker,  # noqa: F401  - imported to register
 )
 from clamper.core.resources.base import (

@@ -77,6 +77,7 @@ def test_the_shipped_registry_loads() -> None:
         "aurora-cluster",
         "lambda-function",
         "sagemaker-notebook",
+        "redshift-cluster",
     }
 
 
@@ -100,6 +101,8 @@ def test_the_shipped_registry_is_the_documented_set() -> None:
         "delete_function_concurrency",
         "stop_notebook_instance",
         "start_notebook_instance",
+        "pause_cluster",
+        "resume_cluster",
     }
 
 
@@ -416,6 +419,7 @@ def test_an_identifier_pattern_that_does_not_compile_is_refused() -> None:
         ("aurora-cluster", "reports", "-reports"),
         ("lambda-function", "retry-loop", "arn:aws:lambda:us-east-1:999999999999:function:x"),
         ("sagemaker-notebook", "research", "research--"),
+        ("redshift-cluster", "warehouse-1", "Warehouse--1"),
     ],
 )
 def test_every_shipped_action_validates_its_identifiers(

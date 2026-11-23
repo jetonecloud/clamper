@@ -159,6 +159,11 @@ def moto_sagemaker(aws_client: Callable[[str], Any]) -> Any:
 
 
 @pytest.fixture()
+def moto_redshift(aws_client: Callable[[str], Any]) -> Any:
+    return aws_client("redshift")
+
+
+@pytest.fixture()
 def moto_dynamodb(aws_client: Callable[[str], Any]) -> Any:
     return aws_client("dynamodb")
 

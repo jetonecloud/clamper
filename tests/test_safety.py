@@ -483,7 +483,7 @@ def test_the_actuator_allowlist_is_the_registrys() -> None:
 
 
 def test_the_allowlist_is_pinned() -> None:
-    """Twelve calls. Widening this has to be a deliberate edit to a test,
+    """Fourteen calls. Widening this has to be a deliberate edit to a test,
     which is a diff somebody reviews."""
     assert load_registry().methods == {
         "stop_instances",
@@ -498,6 +498,8 @@ def test_the_allowlist_is_pinned() -> None:
         "delete_function_concurrency",
         "stop_notebook_instance",
         "start_notebook_instance",
+        "pause_cluster",
+        "resume_cluster",
     }
 
 

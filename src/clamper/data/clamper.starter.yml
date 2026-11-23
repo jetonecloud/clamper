@@ -50,6 +50,7 @@ targets:
     - aurora-cluster
     - lambda-function
     - sagemaker-notebook
+    - redshift-cluster
 
   # Opt-in by id rather than by tag. Prefer this in an account where many
   # people can tag resources: a tag is opt-in anyone who can tag can grant.

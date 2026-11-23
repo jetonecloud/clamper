@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from clamper.core.actions import load_registry
 from clamper.core.config import (
     MODE_DRY_RUN,
     MODE_ENFORCE,
@@ -101,7 +102,7 @@ def test_omitting_types_enables_every_action() -> None:
     and an *empty list* is an error, because those are different intents."""
     config = loads(MINIMAL)
     assert "ec2-instance" in config.targets.types
-    assert len(config.targets.types) == 7
+    assert set(config.targets.types) == load_registry().ids()
 
 
 def test_the_full_config_round_trips() -> None:
