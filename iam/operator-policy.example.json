@@ -191,6 +191,16 @@
       "Resource": [
         "arn:aws:events:*:123456789012:rule/clamper-reconcile"
       ]
+    },
+    {
+      "Sid": "OwnFunction",
+      "Effect": "Allow",
+      "Action": [
+        "lambda:GetFunctionConfiguration"
+      ],
+      "Resource": [
+        "arn:aws:lambda:*:123456789012:function:clamper-enforcer"
+      ]
     }
   ]
 }

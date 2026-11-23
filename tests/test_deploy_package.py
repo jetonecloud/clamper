@@ -57,6 +57,22 @@ def test_the_same_inputs_make_the_same_key() -> None:
     assert changed.key != first.key
 
 
+def test_code_sha256_is_what_lambda_reports_and_follows_the_config() -> None:
+    """Lambda's CodeSha256 is the base64 SHA-256 of the zip. doctor
+    compares against it, so the format has to match exactly."""
+    import base64
+    import hashlib
+
+    config = loads(CONFIG_TEXT)
+    artifacts = deploy.build_artifacts(config, CONFIG_TEXT)
+    assert artifacts.code_sha256 == base64.b64encode(
+        hashlib.sha256(artifacts.zip_bytes).digest()
+    ).decode("ascii")
+    assert base64.b64decode(artifacts.code_sha256).hex() == artifacts.digest
+    changed = deploy.build_artifacts(config, CONFIG_TEXT + "# a comment\n")
+    assert changed.code_sha256 != artifacts.code_sha256
+
+
 def test_the_handler_imports_from_the_zip_alone(tmp_path: Path) -> None:
     """Unzip, then import the handler in a clean interpreter that can see
     only the zip and the standard library plus boto3 — no typer, click or

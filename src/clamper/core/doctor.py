@@ -19,6 +19,13 @@ is a clamp that never happened or a notification nobody got:
 6. **The reconcile schedule is enabled.** A disabled rule leaves the
    once-a-period Budgets alert as the only thing that wakes the enforcer,
    and nothing anywhere says so.
+7. **The deployed enforcer was built from this config.** The config travels
+   inside the zip, so an edit to `clamper.yml` does nothing until somebody
+   deploys it — and until then the limits in the file are not the limits
+   being enforced. The zip is reproducible, so the CLI rebuilds it and
+   compares its digest with the function's `CodeSha256`. A WARN rather
+   than a FAIL: a different Clamper or PyYAML version on this machine
+   changes the digest too, and that is not necessarily wrong.
 
 Importable inside a Lambda, though only the CLI uses it. The credentials
 check lives in the CLI, because it decides whether the rest can run.
@@ -61,12 +68,15 @@ def run_checks(
     *,
     account: str,
     read_spend: Callable[[Limit], Spend],
+    expected_code_sha256: str | None = None,
 ) -> list[Check]:
     checks = [stack_check(config, clients)]
     checks.append(subscription_check(config, clients, account))
     checks.extend(cost_tag_checks(config, clients))
     checks.extend(budget_checks(config, read_spend))
     checks.append(schedule_check(config, clients))
+    if expected_code_sha256 is not None:
+        checks.append(deployed_check(config, clients, expected_code_sha256))
     return checks
 
 
@@ -222,6 +232,35 @@ def schedule_check(config: Config, clients: Clients) -> Check:
         FAIL,
         f"{rule} is {state}. Only a Budgets alert, once a period, will wake the enforcer. "
         f"Enable the rule, or run `clamper deploy` again.",
+    )
+
+
+def deployed_check(config: Config, clients: Clients, expected_code_sha256: str) -> Check:
+    function = StackNames(config.stack_name).function
+    client = clients.get("lambda")
+    try:
+        response = client.get_function_configuration(FunctionName=function)
+    except ClientError as exc:
+        code, message = _error(exc)
+        if code == "ResourceNotFoundException":
+            return Check(
+                "deployed config",
+                FAIL,
+                f"{function} does not exist. Run `clamper deploy`.",
+            )
+        return Check("deployed config", FAIL, f"could not read {function}: {code} - {message}")
+    except BotoCoreError as exc:
+        return Check("deployed config", FAIL, f"could not read {function}: {exc}")
+    if response.get("CodeSha256") == expected_code_sha256:
+        return Check("deployed config", PASS, f"{function} runs {config.source or 'this config'}")
+    modified = response.get("LastModified")
+    return Check(
+        "deployed config",
+        WARN,
+        f"{function} was not built from this clamper.yml"
+        + (f" (last deployed {modified})" if modified else "")
+        + ". Edits do nothing until deployed: run `clamper deploy`. A different Clamper "
+        "or PyYAML version on this machine also shows up here.",
     )
 
 

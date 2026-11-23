@@ -21,6 +21,7 @@ object in Clamper's own bucket — and they are pinned in
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import importlib.metadata
 import io
@@ -60,6 +61,13 @@ class Artifacts:
     @property
     def digest(self) -> str:
         return hashlib.sha256(self.zip_bytes).hexdigest()
+
+    @property
+    def code_sha256(self) -> str:
+        """The digest as Lambda reports it in `CodeSha256`: base64, not hex.
+        The zip is byte-for-byte reproducible, so this is what the deployed
+        function shows if it was built from the same inputs."""
+        return base64.b64encode(hashlib.sha256(self.zip_bytes).digest()).decode("ascii")
 
     @property
     def key(self) -> str:

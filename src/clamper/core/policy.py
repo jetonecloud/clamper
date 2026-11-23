@@ -156,6 +156,12 @@ def operator_policy(
             "Action": ["events:DescribeRule"],
             "Resource": [f"arn:aws:events:{region}:{account}:rule/{names.schedule}"],
         },
+        {
+            "Sid": "OwnFunction",
+            "Effect": "Allow",
+            "Action": ["lambda:GetFunctionConfiguration"],
+            "Resource": [f"arn:aws:lambda:{region}:{account}:function:{names.function}"],
+        },
     ]
     policy = {"Version": POLICY_VERSION, "Statement": statements}
     validate(policy, registry=registry)

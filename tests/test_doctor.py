@@ -222,3 +222,47 @@ def test_a_missing_schedule_is_a_fail_with_the_fix(stubbed: Any) -> None:
     check = doctor.schedule_check(config(), clients)
     assert check.status == doctor.FAIL
     assert "clamper deploy" in check.detail
+
+
+# --- the deployed enforcer ---------------------------------------------------
+
+DEPLOYED = "q1Kq2PZ0ZqH4r0f4yKj0bJ8m3Y9uWQ2Xc7yT1sV5nOw="
+
+
+def _function(code_sha256: str) -> dict[str, Any]:
+    return {
+        "FunctionName": "clamper-enforcer",
+        "CodeSha256": code_sha256,
+        "LastModified": "2026-11-13T15:30:00.000+0000",
+    }
+
+
+def test_an_enforcer_built_from_this_config_passes(stubbed: Any) -> None:
+    clients, stubs = stubbed
+    stubs["lambda"].add_response(
+        "get_function_configuration", _function(DEPLOYED), {"FunctionName": "clamper-enforcer"}
+    )
+    assert doctor.deployed_check(config(), clients, DEPLOYED).status == doctor.PASS
+
+
+def test_an_undeployed_config_change_is_a_warning_with_the_fix(stubbed: Any) -> None:
+    clients, stubs = stubbed
+    stubs["lambda"].add_response(
+        "get_function_configuration", _function(DEPLOYED), {"FunctionName": "clamper-enforcer"}
+    )
+    check = doctor.deployed_check(config(), clients, "somethingelse=")
+    assert check.status == doctor.WARN
+    assert "clamper deploy" in check.detail
+    assert "2026-11-13" in check.detail
+
+
+def test_a_missing_enforcer_is_a_fail(stubbed: Any) -> None:
+    clients, stubs = stubbed
+    stubs["lambda"].add_client_error(
+        "get_function_configuration",
+        service_error_code="ResourceNotFoundException",
+        service_message="Function not found",
+    )
+    check = doctor.deployed_check(config(), clients, DEPLOYED)
+    assert check.status == doctor.FAIL
+    assert "clamper deploy" in check.detail

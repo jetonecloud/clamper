@@ -614,7 +614,8 @@ def doctor(
     """Check that a clamp would work and somebody would hear about it. Read-only.
 
     Credentials, the stack, the email subscription, cost allocation tags,
-    and every budget. Exit 2 if anything FAILs; warnings alone exit 0.
+    every budget, the reconcile schedule, and whether the deployed enforcer
+    was built from this config. Exit 2 if anything FAILs; warnings alone exit 0.
     """
     loaded = _load_config(config)
     click.echo(f"clamper doctor - stack {loaded.stack_name}, {loaded.source}")
@@ -652,6 +653,7 @@ def doctor(
             aws.clients,
             account=identity.account,
             read_spend=_spend_reader(aws, loaded),
+            expected_code_sha256=_expected_code_sha256(loaded),
         )
     for check in checks:
         click.echo(check.line)
@@ -659,6 +661,16 @@ def doctor(
     click.echo("")
     click.echo("Everything checked passed." if code == 0 else "Fix each FAIL above.")
     raise typer.Exit(code)
+
+
+def _expected_code_sha256(loaded: Config) -> str | None:
+    """What the enforcer's `CodeSha256` would be if deployed from here.
+
+    None when there is no file to build from, and the check is skipped."""
+    if loaded.source is None:
+        return None
+    text = Path(loaded.source).read_text(encoding="utf-8")
+    return deploy_module.build_artifacts(loaded, text).code_sha256
 
 
 @app.command("deploy")
