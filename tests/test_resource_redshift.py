@@ -150,9 +150,9 @@ def test_a_workgroup_is_seen_and_not_priced(serverless: Any) -> None:
     assert len(found) == 1
     item = found[0]
     assert isinstance(item, Unsupported)
-    assert item.kind == "Redshift Serverless workgroup"
+    assert item.kind == "Redshift Serverless"
     assert item.resource_id == "adhoc"
-    assert item.description == "base 128 RPU, AVAILABLE"
+    assert item.description == "workgroup, base 128 RPU, AVAILABLE"
     assert item.reason == SERVERLESS_REASON
     assert item.price is None
 
@@ -166,7 +166,7 @@ def test_a_deleting_workgroup_is_left_out(serverless: Any) -> None:
     )
     found = serverless_workgroups(clients, REGION)
     assert [item.resource_id for item in found] == ["staying"]
-    assert found[0].description == "serverless, AVAILABLE"
+    assert found[0].description == "workgroup, serverless, AVAILABLE"
 
 
 def test_every_page_of_workgroups_is_read(serverless: Any) -> None:

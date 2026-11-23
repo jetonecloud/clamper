@@ -154,10 +154,10 @@ def serverless_workgroups(clients: Clients, region: str) -> list[Unsupported]:
             shape = f"base {base} RPU" if base is not None else "serverless"
             found.append(
                 Unsupported(
-                    kind="Redshift Serverless workgroup",
+                    kind="Redshift Serverless",
                     resource_id=name,
                     region=region,
-                    description=f"{shape}, {status}",
+                    description=f"workgroup, {shape}, {status}",
                     reason=SERVERLESS_REASON,
                     price=None,
                 )
