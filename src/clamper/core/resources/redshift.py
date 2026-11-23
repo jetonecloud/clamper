@@ -11,6 +11,12 @@ AWS accepts a pause only from `available`. Anything mid-change (resizing,
 modifying, rebooting) is reported as not clamped with its status; one already
 `paused` or `pausing` is reported as already off. Anything else AWS refuses
 at the call comes back as a failed clamp carrying AWS's own message.
+
+**Redshift Serverless** is found separately and never clamped: a workgroup
+has no pause. It bills per RPU-hour of use, and nothing Clamper could stop
+would take that to zero short of deleting it. `serverless_workgroups` lists
+them as `Unsupported` so `clamper plan` still shows them; there is no code
+path from it to the actuator.
 """
 
 from __future__ import annotations
@@ -25,6 +31,7 @@ from clamper.core.ledger import Entry
 from clamper.core.resources.base import (
     Candidate,
     Handler,
+    Unsupported,
     int_or_none,
     paginate,
     register,
@@ -41,6 +48,11 @@ ALREADY_PAUSED = frozenset({"paused", "pausing"})
 #: Not-found error codes. A cluster that is gone is reported, never treated
 #: as released.
 NOT_FOUND = frozenset({"ClusterNotFound", "ClusterNotFoundFault"})
+
+SERVERLESS_REASON = (
+    "Redshift Serverless workgroups have no pause: they bill per RPU-hour of use, "
+    "and only deleting one would stop that. See docs/actions.md."
+)
 
 
 def _not_found(exc: ClientError) -> bool:
@@ -120,3 +132,34 @@ class RedshiftClusterHandler(Handler):
 
     def release_params(self, entry: Entry) -> dict[str, Any]:
         return {"ClusterIdentifier": entry.target.target_id}
+
+
+def serverless_workgroups(clients: Clients, region: str) -> list[Unsupported]:
+    """Every live Redshift Serverless workgroup in `region`, for a plan.
+
+    Read-only, and returns `Unsupported` rather than `Candidate`, so there is
+    no code path from here to a clamp. No price: a workgroup bills for the
+    RPU-hours its queries use, and a figure from its base capacity would be a
+    guess at usage presented as a rate. A failure to read is the caller's to
+    report.
+    """
+    found: list[Unsupported] = []
+    for page in paginate(clients, "redshift-serverless", "list_workgroups", region):
+        for workgroup in page.get("workgroups", []):
+            name = str(workgroup.get("workgroupName") or "")
+            status = str(workgroup.get("status") or "unknown")
+            if not name or status == "DELETING":
+                continue
+            base = int_or_none(workgroup.get("baseCapacity"))
+            shape = f"base {base} RPU" if base is not None else "serverless"
+            found.append(
+                Unsupported(
+                    kind="Redshift Serverless workgroup",
+                    resource_id=name,
+                    region=region,
+                    description=f"{shape}, {status}",
+                    reason=SERVERLESS_REASON,
+                    price=None,
+                )
+            )
+    return found

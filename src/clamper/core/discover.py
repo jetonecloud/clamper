@@ -12,15 +12,23 @@ Importable inside a Lambda.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 
 from botocore.exceptions import BotoCoreError, ClientError
 
 from clamper.core.actions import Action
 from clamper.core.resources import Candidate, Unsupported, handler_for
+from clamper.core.resources.redshift import serverless_workgroups
 from clamper.core.resources.sagemaker import endpoints
 from clamper.core.session import Clients
+
+#: Readers for things Clamper finds and will not touch, by the name a read
+#: failure is reported under. Each returns `Unsupported`, never a candidate.
+UNSUPPORTED_READERS: tuple[tuple[str, Callable[[Clients, str], list[Unsupported]]], ...] = (
+    ("sagemaker-endpoint", endpoints),
+    ("redshift-serverless-workgroup", serverless_workgroups),
+)
 
 
 @dataclass(frozen=True)
@@ -51,8 +59,9 @@ def discover(
 ) -> Discovery:
     """Every candidate, plus the errors that stop this being every candidate.
 
-    `include_unsupported` adds SageMaker endpoints, which `clamper plan`
-    shows and the enforcer has no use for — and no permission to read.
+    `include_unsupported` adds SageMaker endpoints and Redshift Serverless
+    workgroups, which `clamper plan` shows and the enforcer has no use for —
+    and no permission to read.
     """
     region_list = tuple(regions)
     action_list = tuple(actions)
@@ -66,10 +75,11 @@ def discover(
             except (ClientError, BotoCoreError) as exc:
                 errors.append(DiscoveryError(action.id, region, _describe(exc)))
         if include_unsupported:
-            try:
-                unsupported.extend(endpoints(clients, region))
-            except (ClientError, BotoCoreError) as exc:
-                errors.append(DiscoveryError("sagemaker-endpoint", region, _describe(exc)))
+            for name, reader in UNSUPPORTED_READERS:
+                try:
+                    unsupported.extend(reader(clients, region))
+                except (ClientError, BotoCoreError) as exc:
+                    errors.append(DiscoveryError(name, region, _describe(exc)))
     return Discovery(
         candidates=tuple(candidates),
         unsupported=tuple(unsupported),

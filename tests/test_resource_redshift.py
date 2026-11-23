@@ -2,14 +2,20 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from typing import Any
 
+import boto3
 import pytest
+from botocore.stub import Stubber
 from roundtrip import a_target, discover_one, handler, round_trip
 from support import REGION
 
 from clamper.core.cost import redshift_price
 from clamper.core.ledger import STATUS_CLAMPED, STATUS_RELEASED, Entry
+from clamper.core.resources import Unsupported
+from clamper.core.resources.redshift import SERVERLESS_REASON, serverless_workgroups
+from clamper.core.session import Clients
 
 ACTION = "redshift-cluster"
 
@@ -112,3 +118,70 @@ def test_live_state_is_none_for_a_cluster_that_is_gone(clients_moto: Any) -> Non
         updated_at="2026-11-13T15:30:00+00:00",
     )
     assert handler(ACTION).live_state(clients_moto, entry) is None
+
+
+# --- Redshift Serverless: seen, never clamped -----------------------------
+
+
+@pytest.fixture()
+def serverless() -> Iterator[tuple[Clients, Stubber]]:
+    session = boto3.Session(region_name=REGION)
+    clients = Clients(session, default_region=REGION)
+    client = session.client("redshift-serverless", region_name=REGION)
+    clients.stub("redshift-serverless", client, region=REGION)
+    stub = Stubber(client)
+    stub.activate()
+    yield clients, stub
+    stub.deactivate()
+
+
+def workgroup(name: str, status: str = "AVAILABLE", base: int | None = 128) -> dict[str, Any]:
+    item: dict[str, Any] = {"workgroupName": name, "status": status}
+    if base is not None:
+        item["baseCapacity"] = base
+    return item
+
+
+def test_a_workgroup_is_seen_and_not_priced(serverless: Any) -> None:
+    clients, stub = serverless
+    stub.add_response("list_workgroups", {"workgroups": [workgroup("adhoc")]}, {})
+    found = serverless_workgroups(clients, REGION)
+
+    assert len(found) == 1
+    item = found[0]
+    assert isinstance(item, Unsupported)
+    assert item.kind == "Redshift Serverless workgroup"
+    assert item.resource_id == "adhoc"
+    assert item.description == "base 128 RPU, AVAILABLE"
+    assert item.reason == SERVERLESS_REASON
+    assert item.price is None
+
+
+def test_a_deleting_workgroup_is_left_out(serverless: Any) -> None:
+    clients, stub = serverless
+    stub.add_response(
+        "list_workgroups",
+        {"workgroups": [workgroup("going", "DELETING"), workgroup("staying", base=None)]},
+        {},
+    )
+    found = serverless_workgroups(clients, REGION)
+    assert [item.resource_id for item in found] == ["staying"]
+    assert found[0].description == "serverless, AVAILABLE"
+
+
+def test_every_page_of_workgroups_is_read(serverless: Any) -> None:
+    clients, stub = serverless
+    stub.add_response(
+        "list_workgroups", {"workgroups": [workgroup("one")], "nextToken": "page-2"}, {}
+    )
+    stub.add_response(
+        "list_workgroups", {"workgroups": [workgroup("two")]}, {"nextToken": "page-2"}
+    )
+    assert [item.resource_id for item in serverless_workgroups(clients, REGION)] == ["one", "two"]
+
+
+def test_workgroups_are_not_an_action() -> None:
+    """There is no action id a workgroup could be clamped under."""
+    from clamper.core.actions import load_registry
+
+    assert not any("serverless" in action_id for action_id in load_registry().ids())

@@ -109,7 +109,21 @@ def _shared_clients() -> Any:
 
     from clamper.core.session import Clients
 
-    return Clients(boto3.Session(region_name=REGION), default_region=REGION)
+    session = boto3.Session(region_name=REGION)
+    # moto does not implement Redshift Serverless, and `clamper plan` lists
+    # its workgroups, so every moto-backed plan would report a read error.
+    # Answer as an account with no workgroups would. Tests of the reader
+    # itself use a Stubber on a client of their own.
+    session.events.register(
+        "before-call.redshift-serverless.ListWorkgroups", _no_serverless_workgroups
+    )
+    return Clients(session, default_region=REGION)
+
+
+def _no_serverless_workgroups(**_: Any) -> tuple[Any, dict[str, Any]]:
+    from botocore.awsrequest import AWSResponse
+
+    return AWSResponse("", 200, {}, None), {"workgroups": []}
 
 
 @pytest.fixture()

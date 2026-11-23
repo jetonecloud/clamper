@@ -50,3 +50,25 @@ def test_endpoints_are_only_read_when_asked(clients_moto: Any) -> None:
     assert found.unsupported == () and found.errors == ()
     found = discover(clients_moto, (), [REGION], include_unsupported=True)
     assert found.errors == ()
+
+
+def test_a_denied_unsupported_read_is_an_error_under_its_own_name(
+    clients_moto: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A plan that could not list workgroups says so, rather than showing none."""
+    from clamper.core import discover as discover_module
+
+    def denied(clients: Any, region: str) -> list[Any]:
+        raise ClientError(
+            {"Error": {"Code": "AccessDeniedException", "Message": "not allowed"}},
+            "ListWorkgroups",
+        )
+
+    readers = tuple(
+        (name, denied if name == "redshift-serverless-workgroup" else reader)
+        for name, reader in discover_module.UNSUPPORTED_READERS
+    )
+    monkeypatch.setattr(discover_module, "UNSUPPORTED_READERS", readers)
+
+    found = discover(clients_moto, (), [REGION], include_unsupported=True)
+    assert [item.action_id for item in found.errors] == ["redshift-serverless-workgroup"]

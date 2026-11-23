@@ -138,6 +138,8 @@ def test_the_operator_can_see_endpoints_the_enforcer_cannot() -> None:
     operator = every_action(operator_policy(config(), ACCOUNT))
     assert "sagemaker:ListEndpoints" in operator
     assert "sagemaker:ListEndpoints" not in enforcer
+    assert "redshift-serverless:ListWorkgroups" in operator
+    assert "redshift-serverless:ListWorkgroups" not in enforcer
 
 
 # --- what is refused ----------------------------------------------------

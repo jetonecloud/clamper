@@ -57,12 +57,13 @@ POLICY_VERSION = "2012-10-17"
 READ_VERBS = (*READ_PREFIXES, "View", "Query", "BatchGet")
 
 #: Reads `clamper plan` makes that the enforcer never does. SageMaker
-#: endpoints are found and priced so the biggest number stays on the page,
-#: though v1 will not touch them.
+#: endpoints and Redshift Serverless workgroups are found so the biggest
+#: numbers stay on the page, though Clamper will not touch them.
 VISIBILITY_READS = (
     "sagemaker:ListEndpoints",
     "sagemaker:DescribeEndpoint",
     "sagemaker:DescribeEndpointConfig",
+    "redshift-serverless:ListWorkgroups",
 )
 
 #: Reads the CLI makes about Clamper itself, and `doctor`'s checks.
