@@ -31,6 +31,7 @@ targets:
     - aurora-cluster
     - lambda-function
     - sagemaker-notebook
+    - redshift-cluster
 
 safety:
   max_actions_per_run: 50

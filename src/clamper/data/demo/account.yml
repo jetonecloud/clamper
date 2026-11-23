@@ -5,8 +5,9 @@
 # instance that is the reason this tool exists, things that are clamped,
 # one the fake account refuses to stop, one that is protected, one that is
 # already stopped, one AWS will not stop, Clamper's own function, an
-# untagged instance it never touches, and a SageMaker endpoint it can see
-# and will not touch.
+# untagged instance it never touches, a Redshift warehouse it pauses, and a
+# SageMaker endpoint and a Redshift Serverless workgroup it can see and will
+# not touch.
 
 account: "123456789012"
 
@@ -104,6 +105,13 @@ resources:
     state: {status: InService}
     price: {family: sagemaker, type: ml.t3.large}
 
+  - action: redshift-cluster
+    id: bi-warehouse
+    description: 2x ra3.4xlarge, available
+    tags: {clamper:managed: "true"}
+    state: {status: available}
+    price: {family: redshift, type: ra3.4xlarge, count: 2}
+
 unsupported:
   - kind: SageMaker endpoint
     id: llm-inference
@@ -112,3 +120,10 @@ unsupported:
       the only way to stop an endpoint's cost is to delete it, and a release
       would be a rebuild that might fail. Clamper v1 will not touch it
     price: {family: sagemaker, type: ml.g5.4xlarge, count: 2}
+
+  - kind: Redshift Serverless
+    id: adhoc-queries
+    description: workgroup, base 128 RPU, AVAILABLE
+    reason: >-
+      a workgroup has no pause; it bills per RPU-hour of use, and only
+      deleting it would stop that
