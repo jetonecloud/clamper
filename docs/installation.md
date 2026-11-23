@@ -169,6 +169,15 @@ like — they are plain CloudFormation with no macros or transforms — and run
 Both are `clamper deploy` again. The config travels inside the zip, so a
 change to `clamper.yml` does nothing in your account until it is deployed;
 a new zip means a new key, and CloudFormation updates the function.
+`clamper doctor` warns when the function running in AWS was not built from
+the `clamper.yml` in front of it: it rebuilds the zip, which is
+reproducible, and compares the digest with the function's. A different
+Clamper or PyYAML version on the machine running `doctor` shows up the same
+way, which is why it is a warning and not a failure.
+
+`clamper doctor` also fails if the six-hourly reconcile schedule has been
+disabled. Without it, only the Budgets alert — once per budget per period —
+wakes the enforcer.
 
 ### Removing Clamper
 

@@ -71,7 +71,9 @@ For a person or a CI job running `clamper plan`, `status`, `ledger`,
 `release` and `clamp`. The enforcer's writes and ledger access, plus the
 reads those commands make that the enforcer never does: SageMaker endpoint
 visibility for the plan, the stack's own resource list for self-exclusion,
-the topic's subscriptions and `ce:ListCostAllocationTags` for `doctor`.
+and, for `doctor`, the topic's subscriptions, `ce:ListCostAllocationTags`,
+the reconcile rule (`events:DescribeRule`) and the enforcer's configuration
+(`lambda:GetFunctionConfiguration`), each scoped to Clamper's own resource.
 
 `clamper plan` alone needs only the reads. If you run it from CI — and a
 scheduled `clamper plan` is a cheap way to notice a resource that silently
