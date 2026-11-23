@@ -35,7 +35,7 @@ def stubbed() -> Iterator[tuple[Clients, dict[str, Stubber]]]:
     session = boto3.Session(region_name=REGION)
     clients = Clients(session, default_region=REGION)
     stubs: dict[str, Stubber] = {}
-    for service in ("cloudformation", "sns", "ce"):
+    for service in ("cloudformation", "sns", "ce", "events", "lambda"):
         client = session.client(service, region_name=REGION)
         clients.stub(service, client)
         stubs[service] = Stubber(client)
@@ -182,3 +182,43 @@ def test_doctor_reports_missing_credentials_instead_of_crashing(
     result = CliRunner().invoke(cli.app, ["doctor", "--config", str(path)])
     assert result.exit_code == 2
     assert "FAIL  credentials" in result.stdout
+
+
+# --- the reconcile schedule ------------------------------------------------
+
+
+def _rule(state: str) -> dict[str, Any]:
+    return {
+        "Name": "clamper-reconcile",
+        "Arn": f"arn:aws:events:{REGION}:{ACCOUNT}:rule/clamper-reconcile",
+        "State": state,
+        "ScheduleExpression": "rate(6 hours)",
+    }
+
+
+def test_an_enabled_schedule_passes(stubbed: Any) -> None:
+    clients, stubs = stubbed
+    stubs["events"].add_response("describe_rule", _rule("ENABLED"), {"Name": "clamper-reconcile"})
+    check = doctor.schedule_check(config(), clients)
+    assert check.status == doctor.PASS
+    assert "rate(6 hours)" in check.detail
+
+
+def test_a_disabled_schedule_is_a_fail_not_a_warning(stubbed: Any) -> None:
+    clients, stubs = stubbed
+    stubs["events"].add_response("describe_rule", _rule("DISABLED"), {"Name": "clamper-reconcile"})
+    check = doctor.schedule_check(config(), clients)
+    assert check.status == doctor.FAIL
+    assert "DISABLED" in check.detail
+
+
+def test_a_missing_schedule_is_a_fail_with_the_fix(stubbed: Any) -> None:
+    clients, stubs = stubbed
+    stubs["events"].add_client_error(
+        "describe_rule",
+        service_error_code="ResourceNotFoundException",
+        service_message="Rule clamper-reconcile does not exist.",
+    )
+    check = doctor.schedule_check(config(), clients)
+    assert check.status == doctor.FAIL
+    assert "clamper deploy" in check.detail

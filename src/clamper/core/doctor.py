@@ -16,6 +16,9 @@ is a clamp that never happened or a notification nobody got:
    `ce:ListCostAllocationTags`, which is free; nothing here calls
    `GetCostAndUsage`.
 5. **Every budget is readable** and has calculated spend.
+6. **The reconcile schedule is enabled.** A disabled rule leaves the
+   once-a-period Budgets alert as the only thing that wakes the enforcer,
+   and nothing anywhere says so.
 
 Importable inside a Lambda, though only the CLI uses it. The credentials
 check lives in the CLI, because it decides whether the rest can run.
@@ -63,6 +66,7 @@ def run_checks(
     checks.append(subscription_check(config, clients, account))
     checks.extend(cost_tag_checks(config, clients))
     checks.extend(budget_checks(config, read_spend))
+    checks.append(schedule_check(config, clients))
     return checks
 
 
@@ -191,6 +195,34 @@ def budget_checks(config: Config, read_spend: Callable[[Limit], Spend]) -> list[
                 )
             )
     return out
+
+
+def schedule_check(config: Config, clients: Clients) -> Check:
+    rule = StackNames(config.stack_name).schedule
+    client = clients.get("events")
+    try:
+        response = client.describe_rule(Name=rule)
+    except ClientError as exc:
+        code, message = _error(exc)
+        if code == "ResourceNotFoundException":
+            return Check(
+                "reconcile schedule",
+                FAIL,
+                f"{rule} does not exist. Run `clamper deploy` again.",
+            )
+        return Check("reconcile schedule", FAIL, f"could not read {rule}: {code} - {message}")
+    except BotoCoreError as exc:
+        return Check("reconcile schedule", FAIL, f"could not read {rule}: {exc}")
+    state = str(response.get("State") or "UNKNOWN")
+    if state == "ENABLED":
+        expression = response.get("ScheduleExpression") or "no schedule expression"
+        return Check("reconcile schedule", PASS, f"{rule} is enabled, {expression}")
+    return Check(
+        "reconcile schedule",
+        FAIL,
+        f"{rule} is {state}. Only a Budgets alert, once a period, will wake the enforcer. "
+        f"Enable the rule, or run `clamper deploy` again.",
+    )
 
 
 def exit_code(checks: list[Check]) -> int:

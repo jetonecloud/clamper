@@ -150,6 +150,12 @@ def operator_policy(
             "Action": ["sns:ListSubscriptionsByTopic"],
             "Resource": [f"arn:aws:sns:{region}:{account}:{names.topic}"],
         },
+        {
+            "Sid": "OwnSchedule",
+            "Effect": "Allow",
+            "Action": ["events:DescribeRule"],
+            "Resource": [f"arn:aws:events:{region}:{account}:rule/{names.schedule}"],
+        },
     ]
     policy = {"Version": POLICY_VERSION, "Statement": statements}
     validate(policy, registry=registry)
