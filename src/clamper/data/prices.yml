@@ -161,3 +161,17 @@ families:
     ml.p3.2xlarge: 3.825
     ml.p3.8xlarge: 14.688
     ml.p3.16xlarge: 28.152
+
+  # --- Redshift (per node) ------------------------------------------------
+  #
+  # Per node-hour. A cluster's figure is this times its node count, which is
+  # the compute a pause stops billing. RA3 managed storage is billed
+  # separately and keeps billing while paused, so it is not in these.
+  redshift:
+    dc2.large: 0.25
+    dc2.8xlarge: 4.80
+
+    ra3.large: 0.543
+    ra3.xlplus: 1.086
+    ra3.4xlarge: 3.26
+    ra3.16xlarge: 13.04

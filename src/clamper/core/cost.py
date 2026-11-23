@@ -128,3 +128,21 @@ def rds_price(instance_class: str, *, multi_az: bool = False) -> Price | None:
 
 def sagemaker_price(instance_type: str) -> Price | None:
     return load_table().price("sagemaker", instance_type)
+
+
+def redshift_price(node_type: str, nodes: int) -> Price | None:
+    """A provisioned cluster: the per-node rate times the node count.
+
+    `None` for an unlisted node type, and for a node count below one, which
+    DescribeClusters should never report and which a figure would only hide.
+    """
+    if nodes < 1:
+        return None
+    table = load_table()
+    unit = table.price("redshift", node_type)
+    if unit is None:
+        return None
+    return Price(
+        hourly_usd=round(unit.hourly_usd * nodes, 6),
+        basis=f"{nodes}x {node_type}, {table.basis}",
+    )
